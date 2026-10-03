@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 from crapper.languages.treesitter import (
+    absolute_path as _absolute,
     binary_logic,
     child_of_type,
     complexity,
@@ -20,7 +21,6 @@ from crapper.languages.treesitter import (
     parse,
     start_line,
 )
-from crapper.languages.language import Language, LanguageFactory
 from crapper.model import Function
 
 _DECISIONS = {
@@ -64,6 +64,15 @@ def _in_mod_named(data: bytes, node, name: str) -> bool:
     return name in _ancestor_mods(data, node)
 
 
+def _first_type_name(data: bytes, node) -> str | None:
+    if node.type == "type_identifier":
+        return node_text(data, node)
+    for item in descendants(node):
+        if item.type == "type_identifier":
+            return node_text(data, item)
+    return None
+
+
 def _impl_type(data: bytes, impl) -> str | None:
     saw_for = False
     chosen = None
@@ -73,16 +82,7 @@ def _impl_type(data: bytes, impl) -> str | None:
             chosen = None
             continue
         if child.type in {"type_identifier", "generic_type", "scoped_type_identifier"}:
-            if child.type == "type_identifier":
-                chosen = node_text(data, child)
-            else:
-                ident = child_of_type(child, "type_identifier")
-                if ident is None:
-                    for item in descendants(child):
-                        if item.type == "type_identifier":
-                            ident = item
-                            break
-                chosen = node_text(data, ident) if ident is not None else None
+            chosen = _first_type_name(data, child)
             if saw_for:
                 return chosen
     return chosen
@@ -105,10 +105,27 @@ def _crate_name(path: str) -> tuple[str, Path | None]:
     return "crate", None
 
 
+def _rs_parts(relative: str) -> list[str]:
+    parts = relative.split("/")
+    if parts[-1] == "mod.rs":
+        return parts[:-1]
+    if parts[-1].endswith(".rs"):
+        parts[-1] = parts[-1][:-3]
+    return parts
+
+
+def _with_crate(crate_name: str, parts: list[str]) -> list[str]:
+    if parts[:1] == ["bin"] and len(parts) >= 2:
+        return parts[1:]
+    return [crate_name, *parts]
+
+
 def _file_modules(path: str, crate_name: str, crate_root: Path | None) -> list[str]:
     file_path = Path(path).resolve()
     if crate_root is None:
-        return [crate_name, file_path.stem] if file_path.stem not in {"lib", "main"} else [crate_name]
+        if file_path.stem in {"lib", "main"}:
+            return [crate_name]
+        return [crate_name, file_path.stem]
     try:
         relative = file_path.relative_to(crate_root).as_posix()
     except ValueError:
@@ -117,14 +134,7 @@ def _file_modules(path: str, crate_name: str, crate_root: Path | None) -> list[s
         relative = relative[4:]
     if relative in {"lib.rs", "main.rs"}:
         return [crate_name]
-    parts = relative.split("/")
-    if parts[-1] == "mod.rs":
-        parts = parts[:-1]
-    elif parts[-1].endswith(".rs"):
-        parts[-1] = parts[-1][:-3]
-    if parts[:1] == ["bin"] and len(parts) >= 2:
-        return parts[1:]
-    return [crate_name, *parts]
+    return _with_crate(crate_name, _rs_parts(relative))
 
 
 def _namespace(modules: list[str], extra: list[str], type_name: str | None) -> str:
@@ -132,15 +142,6 @@ def _namespace(modules: list[str], extra: list[str], type_name: str | None) -> s
     if type_name:
         parts.append(type_name)
     return "::".join(part for part in parts if part)
-
-
-def _absolute(path: str, project_root: str | None) -> str:
-    file_path = Path(path)
-    if file_path.is_absolute():
-        return str(file_path)
-    if project_root:
-        return str((Path(project_root) / file_path).resolve())
-    return str(file_path.resolve())
 
 
 def _impl_owner(data: bytes, node):
@@ -187,13 +188,3 @@ def functions_in_source(
         if recorded is not None:
             found.append(recorded)
     return found
-
-
-class Rust(Language):
-    def functions(self, source: str, path: str, project_root: str) -> list[Function]:
-        return functions_in_source(source, path, project_root)
-
-
-class RustFactory(LanguageFactory):
-    def create(self) -> Language:
-        return Rust()

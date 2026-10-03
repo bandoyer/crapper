@@ -15,22 +15,39 @@ from pathlib import Path
 
 from crapper.discover import is_test_file, language_of
 
-_MAVEN = (
-    "mvn -q "
-    "org.jacoco:jacoco-maven-plugin:0.8.12:prepare-agent "
-    "test "
-    "org.jacoco:jacoco-maven-plugin:0.8.12:report"
-)
+_MAVEN = [
+    "mvn",
+    "-q",
+    "org.jacoco:jacoco-maven-plugin:0.8.12:prepare-agent",
+    "test",
+    "org.jacoco:jacoco-maven-plugin:0.8.12:report",
+]
 
 
 def _warn(message: str) -> None:
     print(message, file=sys.stderr)
 
 
-def run_shell(command: str, cwd: Path) -> int:
-    _warn(f"+ ({cwd}) {command}")
+def _show(command: str | list[str]) -> str:
+    if isinstance(command, str):
+        return command
+    return " ".join(shlex.quote(part) for part in command)
+
+
+def run_shell(command: str | list[str], cwd: Path) -> int:
+    """Run a coverage command.
+
+    A list is an argument vector and does not go through a shell, so a path
+    with spaces or metacharacters stays one argument. A string is a command
+    the user typed in `--coverage-command` and runs in a shell.
+    """
+
+    _warn(f"+ ({cwd}) {_show(command)}")
     try:
-        completed = subprocess.run(command, cwd=cwd, shell=True)
+        if isinstance(command, str):
+            completed = subprocess.run(command, cwd=cwd, shell=True)
+        else:
+            completed = subprocess.run(list(command), cwd=cwd)
     except OSError as exc:
         _warn(f"Coverage command failed to start: {exc}")
         return 127
@@ -53,18 +70,49 @@ def _clean_dir(path: Path) -> None:
         shutil.rmtree(path)
 
 
+_COVERAGE_DIRS = {"typescript", "rust", "go", "python"}
+
+
+def _outside_language_dirs(coverage: Path, path: Path) -> bool:
+    relative = path.relative_to(coverage)
+    if path.name in _COVERAGE_DIRS:
+        return False
+    return not _COVERAGE_DIRS.intersection(relative.parts)
+
+
+def _remove_cloverage_html(coverage: Path) -> None:
+    for path in coverage.rglob("*.html"):
+        if not _outside_language_dirs(coverage, path):
+            continue
+        path.unlink()
+
+
+def _remove_empty_dirs(coverage: Path) -> None:
+    directories = [path for path in coverage.rglob("*") if path.is_dir()]
+    for path in sorted(directories, reverse=True):
+        if not _outside_language_dirs(coverage, path):
+            continue
+        try:
+            path.rmdir()
+        except OSError:
+            continue
+
+
 def _clean_clojure(root: Path) -> None:
+    """Remove Cloverage's HTML and top-level lcov without touching other reports.
+
+    Other languages keep their directories. Files that are not Cloverage HTML
+    stay, including anything a project keeps under target/coverage itself.
+    """
+
     coverage = root / "target" / "coverage"
     if not coverage.is_dir():
         return
-    keep = {"typescript", "rust", "go", "python"}
-    for path in coverage.iterdir():
-        if path.name in keep:
-            continue
-        if path.is_dir():
-            shutil.rmtree(path)
-        else:
-            path.unlink()
+    lcov = coverage / "lcov.info"
+    if lcov.is_file():
+        lcov.unlink()
+    _remove_cloverage_html(coverage)
+    _remove_empty_dirs(coverage)
 
 
 _VITEST_CONFIGS = (
@@ -77,15 +125,21 @@ _VITEST_CONFIGS = (
 )
 
 
+class PackageJsonError(Exception):
+    """package.json is present and cannot be read as an object."""
+
+
 def _package_json(package: Path) -> dict | None:
     path = package / "package.json"
     if not path.is_file():
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return None
-    return data if isinstance(data, dict) else None
+    except json.JSONDecodeError as exc:
+        raise PackageJsonError(f"{path}: {exc.msg}") from exc
+    if not isinstance(data, dict):
+        raise PackageJsonError(f"{path}: expected a JSON object")
+    return data
 
 
 def _uses_vitest(package: Path, scripts: dict) -> bool:
@@ -99,7 +153,8 @@ def _vitest_version(package: Path) -> str | None:
     if installed.is_file():
         try:
             data = json.loads(installed.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            _warn(f"{installed}: {exc.msg}")
             data = None
         if isinstance(data, dict) and isinstance(data.get("version"), str):
             return data["version"]
@@ -135,8 +190,13 @@ def _ensure_vitest_coverage(package: Path) -> bool:
         "package.json and the lockfile are restored afterward."
     )
     snapshot = _manifest_snapshot(package)
-    code = run_shell(f"npm install --no-save --no-package-lock {spec}", package)
-    _restore_manifests(snapshot)
+    try:
+        code = run_shell(
+            ["npm", "install", "--no-save", "--no-package-lock", spec],
+            package,
+        )
+    finally:
+        _restore_manifests(snapshot)
     ready = code == 0 and (package / "node_modules" / "@vitest" / "coverage-v8").is_dir()
     if not ready:
         _warn("Vitest's coverage provider is missing. TypeScript coverage will score 0%.")
@@ -155,8 +215,10 @@ def typescript_packages(root: Path, files: list[Path]) -> list[Path]:
     return sorted(packages)
 
 
-def typescript_command(package: Path, files: list[Path], report_dir: Path) -> str | None:
-    """Shell command that writes LCOV into `report_dir`, or None when there is no test script."""
+def typescript_command(
+    package: Path, files: list[Path], report_dir: Path
+) -> list[str] | None:
+    """Argument vector that writes LCOV into `report_dir`, or None when there is no test script."""
 
     data = _package_json(package)
     if data is None:
@@ -165,13 +227,21 @@ def typescript_command(package: Path, files: list[Path], report_dir: Path) -> st
     if not isinstance(scripts, dict):
         scripts = {}
     if "coverage" in scripts:
-        return "npm run coverage"
-    quoted_dir = shlex.quote(str(report_dir))
+        return ["npm", "run", "coverage"]
     if _uses_vitest(package, scripts):
-        return _vitest_coverage_command(package, files, quoted_dir)
+        return _vitest_coverage_command(package, files, report_dir)
     if "test" not in scripts:
         return None
-    return f"npx --yes c8 --reporter=lcov --reports-dir {quoted_dir} npm test"
+    return [
+        "npx",
+        "--yes",
+        "c8",
+        "--reporter=lcov",
+        "--reports-dir",
+        str(report_dir),
+        "npm",
+        "test",
+    ]
 
 
 def _vitest_includes(package: Path, files: list[Path]) -> list[str]:
@@ -184,22 +254,28 @@ def _vitest_includes(package: Path, files: list[Path]) -> list[str]:
             relative = Path(file).resolve().relative_to(package)
         except ValueError:
             continue
-        includes.append(shlex.quote(relative.as_posix()))
+        includes.append(relative.as_posix())
     return includes
 
 
-def _vitest_coverage_command(package: Path, files: list[Path], quoted_dir: str) -> str:
+def _vitest_coverage_command(package: Path, files: list[Path], report_dir: Path) -> list[str]:
     binary = package / "node_modules" / ".bin" / "vitest"
-    runner = shlex.quote(str(binary)) if binary.is_file() else "npx vitest"
-    flags = [
-        "--coverage",
-        "--coverage.reporter=lcov",
-        f"--coverage.reportsDirectory={quoted_dir}",
-        "--coverage.reportOnFailure=true",
-    ]
+    if binary.is_file():
+        command = [str(binary)]
+    else:
+        command = ["npx", "vitest"]
+    command.extend(
+        [
+            "run",
+            "--coverage",
+            "--coverage.reporter=lcov",
+            f"--coverage.reportsDirectory={report_dir}",
+            "--coverage.reportOnFailure=true",
+        ]
+    )
     for include in _vitest_includes(package, files):
-        flags.append(f"--coverage.include={include}")
-    return f"{runner} run " + " ".join(flags)
+        command.append(f"--coverage.include={include}")
+    return command
 
 
 def _coverage_report(root: Path, module: Path, language: str) -> Path:
@@ -212,15 +288,11 @@ def _coverage_report(root: Path, module: Path, language: str) -> Path:
 
 
 def rust_modules(root: Path, files: list[Path]) -> list[Path]:
-    modules: set[Path] = set()
     root = root.resolve()
-    for file in files:
-        if Path(file).suffix != ".rs":
-            continue
-        module = _nearest(file, "Cargo.toml", root)
-        if module is not None:
-            modules.add(module.resolve())
-    return sorted(modules)
+    return [
+        module.resolve()
+        for module in _modules_with(files, ".rs", "Cargo.toml", root)
+    ]
 
 
 def _rust_kind() -> str | None:
@@ -230,10 +302,10 @@ def _rust_kind() -> str | None:
         return "tarpaulin"
     _warn("Neither cargo-llvm-cov nor cargo-tarpaulin is installed. Installing cargo-llvm-cov.")
     if shutil.which("rustup"):
-        code = run_shell("rustup component add llvm-tools-preview", Path.home())
+        code = run_shell(["rustup", "component", "add", "llvm-tools-preview"], Path.home())
         if code != 0:
             _warn("rustup component add llvm-tools-preview failed.")
-    code = run_shell("cargo install cargo-llvm-cov --locked", Path.home())
+    code = run_shell(["cargo", "install", "cargo-llvm-cov", "--locked"], Path.home())
     if code == 0 and shutil.which("cargo-llvm-cov"):
         return "llvm-cov"
     _warn("Rust coverage will score 0%.")
@@ -262,7 +334,7 @@ def _python_executable(package: Path) -> str:
     for relative in (".venv/bin/python", "venv/bin/python"):
         candidate = package / relative
         if candidate.is_file():
-            return shlex.quote(str(candidate))
+            return str(candidate)
     return "python3"
 
 
@@ -295,38 +367,36 @@ def python_sources(package: Path, files: list[Path]) -> str:
 
 def python_coverage_commands(
     py: str, kind: str, data_file: Path, report: Path, source: str
-) -> tuple[str, str]:
-    data = shlex.quote(str(data_file))
-    out = shlex.quote(str(report))
-    source_flag = f" --source={shlex.quote(source)}" if source else ""
+) -> tuple[list[str], list[str]]:
+    run = [py, "-m", "coverage", "run", f"--data-file={data_file}"]
+    if source:
+        run.append(f"--source={source}")
     if kind == "pytest":
-        module = "pytest"
+        run.extend(["-m", "pytest"])
     else:
-        module = "unittest discover -s ."
-    run = f"{py} -m coverage run --data-file={data}{source_flag} -m {module}"
-    lcov = f"{py} -m coverage lcov --data-file={data} -o {out}"
+        run.extend(["-m", "unittest", "discover", "-s", "."])
+    lcov = [py, "-m", "coverage", "lcov", f"--data-file={data_file}", "-o", str(report)]
     return run, lcov
 
 
 def _ensure_python_module(py: str, package: Path, module: str) -> bool:
-    probe = f"{py} -c {shlex.quote('import ' + module)}"
-    if run_shell(probe, package) == 0:
+    if run_shell([py, "-c", f"import {module}"], package) == 0:
         return True
     _warn(
         f"Installing {module} for Python coverage. "
         "The project requirements are left unchanged."
     )
     code = run_shell(
-        f"{py} -m pip install --disable-pip-version-check {module}",
+        [py, "-m", "pip", "install", "--disable-pip-version-check", module],
         package,
     )
     return code == 0
 
 
-def rust_coverage_command(kind: str, report: Path) -> str:
+def rust_coverage_command(kind: str, report: Path) -> list[str]:
     if kind == "llvm-cov":
-        return f"cargo llvm-cov --lcov --output-path {shlex.quote(str(report))}"
-    return f"cargo tarpaulin --out Lcov --output-dir {shlex.quote(str(report.parent))}"
+        return ["cargo", "llvm-cov", "--lcov", "--output-path", str(report)]
+    return ["cargo", "tarpaulin", "--out", "Lcov", "--output-dir", str(report.parent)]
 
 
 def _languages_in(files: list[Path]) -> set[str]:
@@ -354,10 +424,10 @@ def _cover_clojure(root: Path) -> None:
         _warn("No deps.edn or bb.edn; skipping Clojure coverage.")
         return
     _clean_clojure(root)
-    code = run_shell("clj -M:cov --lcov", root)
+    code = run_shell(["clj", "-M:cov", "--lcov"], root)
     if code != 0:
         _warn("clj -M:cov --lcov failed; retrying without --lcov.")
-        code = run_shell("clj -M:cov", root)
+        code = run_shell(["clj", "-M:cov"], root)
     if code != 0:
         _warn(f"Clojure coverage exited {code}. Clojure coverage will score 0%.")
 
@@ -387,7 +457,7 @@ def _cover_go(root: Path, files: list[Path]) -> None:
         profile.parent.mkdir(parents=True, exist_ok=True)
         if profile.exists():
             profile.unlink()
-        code = run_shell(f"go test ./... -coverprofile={profile}", module)
+        code = run_shell(["go", "test", "./...", f"-coverprofile={profile}"], module)
         if code != 0:
             _warn(f"Go coverage exited {code} in {module}. Go coverage will score 0%.")
 
@@ -405,7 +475,11 @@ def _cover_typescript(root: Path, files: list[Path]) -> None:
         return
     for package in packages:
         report = _coverage_report(root, package, "typescript")
-        command = typescript_command(package, files, report.parent)
+        try:
+            command = typescript_command(package, files, report.parent)
+        except PackageJsonError as exc:
+            _warn(str(exc))
+            continue
         if command is None:
             _warn(f"No package.json test script in {package}; skipping TypeScript coverage.")
             continue
@@ -417,8 +491,10 @@ def _cover_typescript(root: Path, files: list[Path]) -> None:
             _warn(f"TypeScript coverage exited {code} in {package}. TypeScript coverage will score 0%.")
 
 
-def _needs_vitest_provider(command: str) -> bool:
-    return command != "npm run coverage" and "vitest" in command
+def _needs_vitest_provider(command: list[str]) -> bool:
+    if command[:3] == ["npm", "run", "coverage"]:
+        return False
+    return any(Path(part).name == "vitest" for part in command)
 
 
 def _python_kind(py: str, package: Path) -> str:
@@ -430,7 +506,9 @@ def _python_kind(py: str, package: Path) -> str:
     return "unittest"
 
 
-def _record_python_lcov(package: Path, code: int, data_file: Path, lcov_cmd: str) -> None:
+def _record_python_lcov(
+    package: Path, code: int, data_file: Path, lcov_cmd: str | list[str]
+) -> None:
     if not data_file.exists():
         if code != 0:
             _warn(f"Python coverage exited {code} in {package}. Python coverage will score 0%.")
@@ -476,15 +554,23 @@ def _cover_rust(root: Path, files: list[Path]) -> None:
             _warn(f"Rust coverage exited {code} in {module}. Rust coverage will score 0%.")
 
 
-def run_coverage(root: Path, files: list[Path], command: str | None) -> None:
-    """Generate coverage reports for the languages present in `files`."""
+def run_coverage(root: Path, files: list[Path], command: str | None) -> int:
+    """Generate coverage reports for the languages present in `files`.
+
+    Returns the custom command's status. A non-zero status means the caller
+    must not read reports already on disk. Per-language runs return 0; a
+    failed tool is reported and that language scores 0% when it wrote nothing.
+    """
 
     root = root.resolve()
     if command:
         code = run_shell(command, root)
         if code != 0:
-            _warn(f"Coverage command exited {code}. Coverage may score 0%.")
-        return
+            _warn(
+                f"Coverage command exited {code}. "
+                "Reports already on disk will not be read."
+            )
+        return code
 
     languages = _languages_in(files)
     if "clojure" in languages:
@@ -499,3 +585,4 @@ def run_coverage(root: Path, files: list[Path], command: str | None) -> None:
         _cover_python(root, files)
     if "rust" in languages:
         _cover_rust(root, files)
+    return 0

@@ -17,7 +17,6 @@ from crapper.languages.treesitter import (
     parse,
     start_line,
 )
-from crapper.languages.language import Language, LanguageFactory
 from crapper.model import Function
 
 _PACKAGE = re.compile(r"(?m)^\s*package\s+([a-zA-Z_][\w.]*)\s*;")
@@ -86,12 +85,16 @@ def _qualify(package: str | None, names: list[str], nested: str) -> str:
     return body
 
 
-def functions_in_source(source: str, path: str) -> list[Function]:
+def functions_in_source(
+    source: str, path: str, project_root: str | None = None
+) -> list[Function]:
+    del project_root
     data, tree = parse(source, "java")
     package = _package_name(source)
     found: list[Function] = []
-
-    def visit(node) -> None:
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
         if node.type == "method_declaration" and not _inside_executable(node):
             if child_of_type(node, "block") is not None:
                 ident = child_of_type(node, "identifier")
@@ -109,19 +112,6 @@ def functions_in_source(source: str, path: str) -> list[Function]:
                             jacoco_class=_qualify(package, names, "$"),
                         )
                     )
-            return
-        for child in node.children:
-            visit(child)
-
-    visit(tree.root_node)
+            continue
+        stack.extend(reversed(node.children))
     return found
-
-
-class Java(Language):
-    def functions(self, source: str, path: str, project_root: str) -> list[Function]:
-        return functions_in_source(source, path)
-
-
-class JavaFactory(LanguageFactory):
-    def create(self) -> Language:
-        return Java()

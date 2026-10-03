@@ -8,13 +8,34 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from crapper.analyze import analyze_files
-from crapper.coverage import load_bundle
-from crapper.discover import is_test_file, iter_source_files, language_of
+from crapper.coverage import CoverageBundle, load_bundle
+from crapper.discover import (
+    CLOJURE_TEST_SUFFIXES,
+    GO_TEST_SUFFIX,
+    JS_TEST_SUFFIXES,
+    SKIP_DIRS,
+    TEST_DIRS,
+    is_test_file,
+    iter_source_files,
+    language_of,
+)
 from crapper.metrics import write_metrics
 from crapper.report import format_report
 from crapper.runners import run_coverage
 
-HELP = """\
+_SKIPPED_DIRS = ", ".join(sorted(SKIP_DIRS | TEST_DIRS))
+_TEST_PATTERNS = ", ".join(
+    [
+        f"*{GO_TEST_SUFFIX}",
+        *[f"*{suffix}" for suffix in CLOJURE_TEST_SUFFIXES],
+        *[f"*{suffix}" for suffix in JS_TEST_SUFFIXES],
+        "test_*.py",
+        "*_test.py",
+        "conftest.py",
+    ]
+)
+
+HELP = f"""\
 Usage: crapper [options] [path-or-filter ...]
 
 Detect the language of each source file and score it with the CRAP metric
@@ -46,8 +67,7 @@ Arguments:
                     path contains this text are analyzed.
 
 With no paths, source files under the project root are analyzed. Directories
-named test, tests, spec, specs, vendor, node_modules, and target are skipped,
-as are *_test.go, *.spec.ts, test_*.py, and *_test.py files.
+named {_SKIPPED_DIRS} are skipped, as are {_TEST_PATTERNS}.
 
 Coverage, when it is produced:
   Clojure      clj -M:cov --lcov, then Cloverage form counts or LCOV
@@ -144,26 +164,58 @@ def parse_args(argv: list[str] | None = None) -> Options:
     return options
 
 
-def _changed_files(root: Path) -> list[Path]:
-    result = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=root,
+class GitError(Exception):
+    """git could not describe the working tree. `code` is git's status."""
+
+    def __init__(self, code: int, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _git(root: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(root), *args],
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
-    if result.returncode != 0:
-        print(result.stderr.strip() or "git status failed", file=sys.stderr)
-        return []
+
+
+def _changed_files(root: Path) -> list[Path]:
+    """Added and modified files from git, including files in new directories.
+
+    Paths come from `git status -z`, which does not quote non-ASCII names.
+    They are resolved from the repository root, then limited to `root`, so
+    `--root` can be a subdirectory. Deleted files are left out.
+    """
+
+    top_result = _git(root, ["rev-parse", "--show-toplevel"])
+    if top_result.returncode != 0:
+        raise GitError(top_result.returncode, top_result.stderr.strip() or "git status failed")
+    status = _git(
+        root,
+        [
+            "status",
+            "--porcelain",
+            "-z",
+            "--no-renames",
+            "--untracked-files=all",
+            "--",
+            ".",
+        ],
+    )
+    if status.returncode != 0:
+        raise GitError(status.returncode, status.stderr.strip() or "git status failed")
+    top = Path(top_result.stdout.strip())
+    limit = root.resolve()
     found: list[Path] = []
-    for line in result.stdout.splitlines():
-        if len(line) < 4:
+    for entry in status.stdout.split("\0"):
+        if len(entry) < 4:
             continue
-        path_text = line[3:].strip()
-        if " -> " in path_text:
-            path_text = path_text.split(" -> ", 1)[1]
-        path_text = path_text.strip('"')
-        found.append((root / path_text).resolve())
+        path = (top / entry[3:]).resolve()
+        if path.is_file() and path.is_relative_to(limit):
+            found.append(path)
     return found
 
 
@@ -222,38 +274,56 @@ def select_files(options: Options) -> list[Path]:
     return sorted({path.resolve() for path in files}, key=lambda path: path.as_posix())
 
 
+def _show_help(options: Options) -> int:
+    stream = sys.stdout if options.exit_code == 0 else sys.stderr
+    print(options.message, file=stream, end="" if options.message.endswith("\n") else "\n")
+    return options.exit_code
+
+
+def _coverage_bundle(options: Options, root: Path, files: list[Path]):
+    if options.no_coverage:
+        return None
+    if options.use_existing_coverage:
+        return load_bundle(root)
+    status = run_coverage(root, files, options.coverage_command)
+    if options.coverage_command and status not in (0, None):
+        return CoverageBundle()
+    return load_bundle(root)
+
+
+def _threshold_status(options: Options, entries) -> int:
+    if options.threshold is None:
+        return 0
+    scored = [entry.crap for entry in entries if entry.crap is not None]
+    if scored and max(scored) > options.threshold:
+        print(
+            f"CRAP threshold exceeded: {max(scored):.1f} > {options.threshold:.1f}",
+            file=sys.stderr,
+        )
+        return 2
+    return 0
+
+
 def run(argv: list[str] | None = None) -> int:
     options = parse_args(argv)
     if options.action == "help":
-        stream = sys.stdout if options.exit_code == 0 else sys.stderr
-        print(options.message, file=stream, end="" if options.message.endswith("\n") else "\n")
-        return options.exit_code
+        return _show_help(options)
 
     root = options.project_root.resolve()
-    files = select_files(options)
+    try:
+        files = select_files(options)
+    except GitError as exc:
+        print(str(exc), file=sys.stderr)
+        return exc.code
     if not files:
         print("No source files to analyze.")
         return 0
 
-    bundle = None
-    if not options.no_coverage:
-        if not options.use_existing_coverage:
-            run_coverage(root, files, options.coverage_command)
-        bundle = load_bundle(root)
-
-    entries = analyze_files(files, root, bundle)
+    entries = analyze_files(files, root, _coverage_bundle(options, root, files))
     metrics = write_metrics(entries, root)
     print(format_report(entries), end="", flush=True)
     print(f"Wrote {metrics}", file=sys.stderr)
-    if options.threshold is not None:
-        scored = [entry.crap for entry in entries if entry.crap is not None]
-        if scored and max(scored) > options.threshold:
-            print(
-                f"CRAP threshold exceeded: {max(scored):.1f} > {options.threshold:.1f}",
-                file=sys.stderr,
-            )
-            return 2
-    return 0
+    return _threshold_status(options, entries)
 
 
 def main(argv: list[str] | None = None) -> None:

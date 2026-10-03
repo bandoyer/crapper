@@ -21,7 +21,6 @@ from crapper.languages.treesitter import (
     parse,
     start_line,
 )
-from crapper.languages.language import Language, LanguageFactory
 from crapper.model import Function
 
 _DECISIONS = {
@@ -86,22 +85,35 @@ def _grammar(path: str) -> str:
     return "typescript"
 
 
-def _module_namespace(path: str, source_root: str | None) -> str:
-    relative = path.replace("\\", "/")
+def _strip_root_prefix(relative: str, source_root: str | None) -> str:
     root = (source_root or "").replace("\\", "/").rstrip("/")
     if root and root != "." and relative.startswith(root + "/"):
-        relative = relative[len(root) + 1 :]
-    elif relative.startswith("./"):
-        relative = relative[2:]
+        return relative[len(root) + 1 :]
+    if relative.startswith("./"):
+        return relative[2:]
+    return relative
+
+
+def _strip_src_dir(relative: str) -> str:
     if relative.startswith("src/"):
-        relative = relative[4:]
-    elif "/src/" in relative:
-        relative = relative.split("/src/", 1)[1]
+        return relative[4:]
+    if "/src/" in relative:
+        return relative.split("/src/", 1)[1]
+    return relative
+
+
+def _strip_script_suffix(relative: str) -> str:
     for suffix in (".tsx", ".mts", ".cts", ".jsx", ".mjs", ".cjs", ".ts", ".js"):
         if relative.endswith(suffix):
-            relative = relative[: -len(suffix)]
-            break
-    return relative.replace("/", ".")
+            return relative[: -len(suffix)]
+    return relative
+
+
+def _module_namespace(path: str, source_root: str | None) -> str:
+    relative = path.replace("\\", "/")
+    relative = _strip_root_prefix(relative, source_root)
+    relative = _strip_src_dir(relative)
+    return _strip_script_suffix(relative).replace("/", ".")
 
 
 def _inside_function(node) -> bool:
@@ -385,13 +397,3 @@ def functions_in_source(
     _append_routes(found, routes, data, module, path)
     found.sort(key=lambda item: item[0])
     return [function for _, function in found]
-
-
-class TypeScript(Language):
-    def functions(self, source: str, path: str, project_root: str) -> list[Function]:
-        return functions_in_source(source, path, project_root)
-
-
-class TypeScriptFactory(LanguageFactory):
-    def create(self) -> Language:
-        return TypeScript()

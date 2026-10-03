@@ -10,6 +10,7 @@ uml-viewer makes between a class and its operations.
 from pathlib import Path
 
 from crapper.languages.treesitter import (
+    absolute_path as _absolute,
     binary_logic,
     child_of_type,
     complexity,
@@ -19,7 +20,6 @@ from crapper.languages.treesitter import (
     parse,
     start_line,
 )
-from crapper.languages.language import Language, LanguageFactory
 from crapper.model import Function
 
 _DECISIONS = {
@@ -106,15 +106,6 @@ def package_namespace(path: str, package_name: str) -> str:
     return f"{module}/{relative}"
 
 
-def _absolute(path: str, project_root: str | None) -> str:
-    file_path = Path(path)
-    if file_path.is_absolute():
-        return str(file_path)
-    if project_root:
-        return str((Path(project_root) / file_path).resolve())
-    return str(file_path.resolve())
-
-
 def functions_in_source(
     source: str, path: str, project_root: str | None = None
 ) -> list[Function]:
@@ -150,13 +141,3 @@ def functions_in_source(
             )
         )
     return found
-
-
-class Go(Language):
-    def functions(self, source: str, path: str, project_root: str) -> list[Function]:
-        return functions_in_source(source, path, project_root)
-
-
-class GoFactory(LanguageFactory):
-    def create(self) -> Language:
-        return Go()

@@ -25,12 +25,21 @@ def _coverage(bundle: CoverageBundle | None, function: Function) -> float | None
     return found
 
 
+def _source_path(file: Path, root: Path) -> str:
+    try:
+        return file.relative_to(root).as_posix()
+    except ValueError:
+        return file.as_posix()
+
+
 def analyze_files(
     files: list[Path],
     project_root: Path,
     bundle: CoverageBundle | None,
 ) -> list[Entry]:
     root = project_root.resolve()
+    if bundle is not None:
+        bundle.bind_sources([_source_path(file.resolve(), root) for file in files])
     entries: list[Entry] = []
     for file in files:
         file = file.resolve()

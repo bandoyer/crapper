@@ -123,6 +123,52 @@ def test_go_coverage_is_read_from_the_bundle():
     assert bundle.percent_for(function()) == 100.0
 
 
+def test_the_most_specific_prefix_wins_and_a_tie_matches_nothing():
+    specific = parse_go_profile(
+        "mode: set\n"
+        "other/proj/src/a.go:1.1,2.2 1 0\n"
+        "proj/src/a.go:1.1,2.2 1 1\n"
+    )
+    assert go_percent(specific, "src/a.go", 1, 2) == 100.0
+    tied = parse_go_profile(
+        "mode: set\nproj/a.go:1.1,2.2 1 1\nother/a.go:1.1,2.2 1 0\n"
+    )
+    assert go_percent(tied, "a.go", 1, 2) is None
+    assert go_percent(specific, "/", 1, 2) is None
+
+
+def test_exact_profile_key_wins_over_a_suffix():
+    profile = parse_go_profile(
+        "mode: set\n"
+        "a/b/main.go:1.1,2.2 1 1\n"
+        "b/main.go:1.1,2.2 1 0\n"
+    )
+    assert go_percent(profile, "b/main.go", 1, 2) == 0.0
+    assert go_percent(profile, "a/b/main.go", 1, 2) == 100.0
+
+
+def test_a_shorter_file_does_not_take_a_longer_files_coverage():
+    bundle = CoverageBundle(
+        go_profile=parse_go_profile("mode: set\na/b/main.go:1.1,2.2 1 1\n")
+    )
+    bundle.bind_sources(["b/main.go", "a/b/main.go"])
+    short = function(path="b/main.go", start_line=1, end_line=2)
+    long = function(path="a/b/main.go", start_line=1, end_line=2)
+    assert bundle.percent_for(short) is None
+    assert bundle.percent_for(long) == 100.0
+
+
+def test_a_short_report_key_matches_one_longer_source():
+    bundle = CoverageBundle(
+        go_profile=parse_go_profile("mode: set\nboard.go:4.1,6.2 2 1\n")
+    )
+    bundle.bind_sources(["cmd/board.go"])
+    assert bundle.percent_for(function(path="cmd/board.go")) == 100.0
+    bundle.bind_sources(["cmd/board.go", "other/board.go"])
+    assert bundle.percent_for(function(path="cmd/board.go")) is None
+    assert bundle.percent_for(function(path="other/board.go")) is None
+
+
 def test_suffix_lookup_finds_a_report_keyed_by_a_longer_path():
     bundle = CoverageBundle(lcov={"proj/src/demo/core.clj": {3: (1, 1), 4: (0, 1)}})
     fn = function(
@@ -262,6 +308,35 @@ def test_typescript_namespaces_and_declarations_without_bodies():
 def test_python_function_without_a_name_is_skipped():
     source = "def choose(x):\n    return x\n"
     assert [fn.name for fn in python_functions(source, "src/app.py", "/proj")] == ["choose"]
+
+
+def test_a_deep_expression_does_not_recurse_off_the_stack():
+    expr = " + ".join(["1"] * 1200)
+    python = python_functions(f"def huge():\n    return {expr}\n", "huge.py", None)
+    assert [fn.name for fn in python] == ["huge"]
+    java = java_functions(
+        f"class Huge {{\n  int huge() {{ return {expr}; }}\n}}\n",
+        "Huge.java",
+    )
+    assert [fn.name for fn in java] == ["huge"]
+
+
+def test_analyze_does_not_give_a_short_path_the_longer_files_coverage(tmp_path):
+    body = "package demo\nfunc Place() int { return 1 }\n"
+    short = tmp_path / "b" / "main.go"
+    long = tmp_path / "a" / "b" / "main.go"
+    short.parent.mkdir(parents=True)
+    long.parent.mkdir(parents=True)
+    short.write_text(body, encoding="utf-8")
+    long.write_text(body, encoding="utf-8")
+    bundle = CoverageBundle(
+        go_profile=parse_go_profile("mode: set\na/b/main.go:1.1,2.2 1 1\n")
+    )
+    entries = analyze_files([short, long], tmp_path, bundle)
+    assert [(entry.name, entry.path, entry.coverage) for entry in entries] == [
+        ("Place", "b/main.go", 0.0),
+        ("Place", "a/b/main.go", 100.0),
+    ]
 
 
 def test_rust_relative_path_and_a_trait_method(tmp_path):

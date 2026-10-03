@@ -101,6 +101,68 @@ def test_strings_comments_and_character_literals_stay_inside_one_form():
     assert [item["name"] for item in extract_functions(source)] == ["foo"]
 
 
+def test_discards_and_metadata_cover_each_reader_form():
+    source = r"""
+#_
+; gone
+(defn ghost [] (if x 1 0))
+#_ "string"
+#_ \x
+#_ symbol
+#_ #_(defn inner [] (if x 1 0))
+#_(defn boxed []
+  "str"
+  \;
+  ; comment
+  (if x 1 0))
+(defn ^{:doc "hi" :private true} kept [] 1)
+(defn ^{:flag \; :private true} also [] 1)
+(defn ^{:private true ; note
+  } third [] 1)
+( defn spaced [] 1)
+(defn)
+(defn ^)
+"""
+    assert [item["name"] for item in extract_functions(source)] == [
+        "kept",
+        "also",
+        "third",
+        "spaced",
+    ]
+    assert extract_functions("(defn ^{:private kept [] 1)") == []
+
+
 def test_character_literals_do_not_swallow_the_next_defn():
     source = '(def x #{\\"})\n(defn foo [] 1)'
     assert [item["name"] for item in extract_functions(source)] == ["foo"]
+
+
+def test_reader_keeps_the_real_namespace_name_and_decisions():
+    source = r""";; (ns demo.wrong)
+(ns demo.core)
+#_(defn dropped [x]
+  (if x 1 0))
+(defn ^:private kept [x]
+  #_(if x 1 0)
+  1)
+(defn ^{:private true} also [] 1)
+(defn quoted []
+  \"
+  (if x 1 0))
+(defn semi []
+  \;
+  (if true 1 2))
+"""
+    found = functions_in_source(source, "src/demo/core.clj", "/proj")
+    assert [(item.name, item.complexity) for item in found] == [
+        ("kept", 1),
+        ("also", 1),
+        ("quoted", 2),
+        ("semi", 2),
+    ]
+    assert {item.namespace for item in found} == {"demo.core"}
+    assert cyclomatic_complexity(r'(defn semi [] \; (if true 1 2))') == 2
+    assert cyclomatic_complexity(r'(defn quoted [] \" (if x 1 0))') == 2
+    assert extract_functions("#_(defn dropped [] (if x 1 0))\n(defn kept [] 1)\n") == [
+        {"name": "kept", "start_line": 2, "end_line": 2, "complexity": 1}
+    ]

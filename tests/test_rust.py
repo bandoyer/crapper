@@ -1,4 +1,6 @@
-from crapper.languages.rust import functions_in_source
+from pathlib import Path
+
+from crapper.languages.rust import _file_modules, functions_in_source
 
 SOURCE = """
 pub fn choose(x: i32) -> i32 {
@@ -78,6 +80,10 @@ def test_module_paths_outside_the_usual_layout(tmp_path):
     assert outside[0].name == "loose"
     bare = functions_in_source("pub fn bare() {}\n", str(tmp_path / "notes.rs"), None)
     assert bare[0].name == "bare"
+
+
+def test_a_file_outside_the_crate_root_uses_the_crate_name():
+    assert _file_modules("/tmp/loose.rs", "demo", Path("/projects/demo")) == ["demo"]
 
 
 def test_nested_module_path(tmp_path):

@@ -7,14 +7,12 @@ variants, `and`, `or`, `loop`, `catch`, and each clause of `cond`, `condp`,
 
 import re
 
-from crapper.languages.language import Language, LanguageFactory
 from crapper.model import Function
 
 _DECISION = re.compile(
     r"\((if-not|if-let|if-some|when-not|when-let|when-some|when-first|if|when|and|or|loop|catch)[\s\)]"
 )
 _COND = re.compile(r"\((some->>|some->|cond->>|cond->|cond|condp|case)[\s\)]")
-_DEFN = re.compile(r"(?s)^\(\s*defn-?\s+([^\s\(\)\[\]\{\}\"]+)")
 _NS = re.compile(r"\(\s*ns\s+([A-Za-z0-9*+!_?.\-/]+)")
 _IN_NS = re.compile(r"\(\s*in-ns\s+'([A-Za-z0-9*+!_?.\-/]+)\s*\)")
 _IN_NS_QUOTE = re.compile(
@@ -33,38 +31,125 @@ _THREAD_FORMS = {"some->", "some->>"}
 _CHAR_DELIMITERS = set("()[]{}\";,")
 
 
-def _strip_strings(text: str) -> str:
-    mode = "normal"
-    escaped = False
-    out: list[str] = []
-    for ch in text:
-        newline = ch == "\n"
-        if mode == "string":
-            if escaped:
-                out.append(ch if newline else " ")
-                escaped = False
-            elif ch == "\\":
-                out.append(" ")
-                escaped = True
-            elif ch == '"':
-                out.append(ch)
-                mode = "normal"
-            else:
-                out.append(ch if newline else " ")
-        elif ch == '"':
-            out.append(ch)
-            mode = "string"
-        else:
-            out.append(ch)
-    return "".join(out)
+def _blank_span(source: str, start: int, end: int, out: list[str]) -> None:
+    for ch in source[start:end]:
+        out.append("\n" if ch == "\n" else " ")
 
 
-def _strip_comments(text: str) -> str:
-    return "\n".join(re.sub(r";.*", "", line) for line in text.splitlines())
+def _advance_past_reader_token(source: str, index: int) -> int | None:
+    """Index after a string, character, or comment, or None when `index` is code."""
+
+    ch = source[index]
+    if ch == '"':
+        return _consume_string(source, index, 1)[0]
+    if ch == "\\":
+        return _char_literal_end(source, index)
+    if ch != ";":
+        return None
+    while index < len(source) and source[index] != "\n":
+        index += 1
+    return index
+
+
+def _balanced_end(source: str, index: int) -> int:
+    opener = source[index]
+    closer = {"(": ")", "[": "]", "{": "}"}[opener]
+    depth = 0
+    while index < len(source):
+        nxt = _advance_past_reader_token(source, index)
+        if nxt is not None:
+            index = nxt
+            continue
+        ch = source[index]
+        index += 1
+        if ch == opener:
+            depth += 1
+        elif ch == closer:
+            depth -= 1
+            if depth == 0:
+                return index
+    return index
+
+
+def _skip_space_and_comment(source: str, index: int) -> int:
+    while index < len(source) and source[index].isspace():
+        index += 1
+    if index < len(source) and source[index] == ";":
+        while index < len(source) and source[index] != "\n":
+            index += 1
+    return index
+
+
+def _skip_ignorable(source: str, index: int) -> int:
+    while True:
+        nxt = _skip_space_and_comment(source, index)
+        if nxt == index:
+            return index
+        index = nxt
+
+
+def _end_of_atom(source: str, index: int) -> int:
+    while index < len(source) and not source[index].isspace() and source[index] not in "()[]{}\";":
+        index += 1
+    return index
+
+
+def _end_of_one_form(source: str, index: int) -> int:
+    ch = source[index]
+    if ch in "([{":
+        return _balanced_end(source, index)
+    if ch == '"':
+        return _consume_string(source, index, 1)[0]
+    if ch == "\\":
+        return _char_literal_end(source, index)
+    if source.startswith("#_", index):
+        return _form_end(source, index + 2)
+    return _end_of_atom(source, index)
+
+
+def _form_end(source: str, index: int) -> int:
+    """Index just after the next form. `index` may sit on whitespace before it."""
+
+    index = _skip_ignorable(source, index)
+    if index >= len(source):
+        return index
+    return _end_of_one_form(source, index)
 
 
 def without_strings_and_comments(source: str) -> str:
-    return _strip_comments(_strip_strings(source))
+    """Blank strings, comments, character literals, and `#_` discarded forms.
+
+    Character literals are blanked before `"` or `;` can be read, so `\\"` does
+    not open a string and `\\;` does not open a comment.
+    """
+
+    out: list[str] = []
+    index = 0
+    while index < len(source):
+        if source.startswith("#_", index):
+            end = _form_end(source, index + 2)
+            _blank_span(source, index, end, out)
+            index = end
+            continue
+        ch = source[index]
+        if ch == '"':
+            end = _consume_string(source, index, 1)[0]
+            _blank_span(source, index, end, out)
+            index = end
+            continue
+        if ch == "\\":
+            end = _char_literal_end(source, index)
+            _blank_span(source, index, end, out)
+            index = end
+            continue
+        if ch == ";":
+            while index < len(source) and source[index] != "\n":
+                out.append(" ")
+                index += 1
+            continue
+        out.append(ch)
+        index += 1
+    return "".join(out)
 
 
 def _open_bracket(ch: str) -> bool:
@@ -73,6 +158,24 @@ def _open_bracket(ch: str) -> bool:
 
 def _close_bracket(ch: str) -> bool:
     return ch in ")}]"
+
+
+def _on_open_bracket(depth: int, in_form: bool, forms: int) -> tuple[int, bool, int]:
+    if depth == 1 and not in_form:
+        forms += 1
+    return depth + 1, True, forms
+
+
+def _on_close_bracket(depth: int, in_form: bool, forms: int) -> tuple[int, bool, int]:
+    if depth == 1:
+        in_form = False
+    return depth - 1, in_form, forms
+
+
+def _on_atom(depth: int, in_form: bool, forms: int) -> tuple[int, bool, int]:
+    if depth == 1 and not in_form:
+        forms += 1
+    return depth, True, forms
 
 
 def _count_top_level_forms(text: str, start: int) -> int:
@@ -84,20 +187,13 @@ def _count_top_level_forms(text: str, start: int) -> int:
     while i < n and depth != 0:
         ch = text[i]
         if _open_bracket(ch):
-            if depth == 1 and not in_form:
-                forms += 1
-            depth += 1
-            in_form = True
+            depth, in_form, forms = _on_open_bracket(depth, in_form, forms)
         elif _close_bracket(ch):
-            if depth == 1:
-                in_form = False
-            depth -= 1
+            depth, in_form, forms = _on_close_bracket(depth, in_form, forms)
         elif ch.isspace():
             in_form = depth != 1
         else:
-            if depth == 1 and not in_form:
-                forms += 1
-            in_form = True
+            depth, in_form, forms = _on_atom(depth, in_form, forms)
         i += 1
     return forms
 
@@ -128,7 +224,7 @@ def _count_clauses(text: str, form_type: str, match_start: int) -> int:
 def _count_cond_decisions(clean: str) -> int:
     total = 0
     for match in _COND.finditer(clean):
-        form_type = _COND.match(match.group(0)).group(1)
+        form_type = match.group(1)
         total += _count_clauses(clean, form_type, match.start())
     return total
 
@@ -178,16 +274,73 @@ def _consume_string(source: str, index: int, line: int) -> tuple[int, int]:
     return index, line
 
 
+_NAME_STOP = " \t\n\r()[]{}\""
+
+
+def _skip_space(form: str, index: int) -> int:
+    while index < len(form) and form[index].isspace():
+        index += 1
+    return index
+
+
+def _keyword_ends(form: str, after: int) -> bool:
+    return after >= len(form) or form[after] in _NAME_STOP
+
+
+def _defn_keyword_end(form: str, index: int) -> int | None:
+    for candidate in ("defn-", "defn"):
+        after = index + len(candidate)
+        if form.startswith(candidate, index) and _keyword_ends(form, after):
+            return after
+    return None
+
+
+def _skip_metadata(form: str, index: int) -> int:
+    index += 1
+    if index < len(form) and form[index] == "{":
+        return _balanced_end(form, index)
+    while index < len(form) and form[index] not in _NAME_STOP:
+        index += 1
+    return index
+
+
+def _skip_leading_metadata(form: str, index: int) -> int:
+    while True:
+        index = _skip_space(form, index)
+        if index < len(form) and form[index] == "^":
+            index = _skip_metadata(form, index)
+            continue
+        return index
+
+
+def _read_name(form: str, index: int) -> str | None:
+    if index >= len(form) or form[index] in "()[]{}\";":
+        return None
+    start = index
+    while index < len(form) and form[index] not in _NAME_STOP:
+        index += 1
+    return form[start:index]
+
+
+def _defn_name(form: str) -> str | None:
+    if not form.startswith("("):
+        return None
+    keyword_at = _defn_keyword_end(form, _skip_space(form, 1))
+    if keyword_at is None:
+        return None
+    return _read_name(form, _skip_leading_metadata(form, keyword_at))
+
+
 def _remember_form(
     forms: list[dict], source: str, start: int, start_line: int, end: int, line: int
 ) -> None:
     form_text = source[start : end + 1]
-    matched = _DEFN.match(form_text)
-    if matched is None:
+    name = _defn_name(form_text)
+    if name is None:
         return
     forms.append(
         {
-            "name": matched.group(1),
+            "name": name,
             "start_line": start_line,
             "end_line": line,
             "text": form_text,
@@ -202,6 +355,20 @@ def _close_form(forms, source, depth, form_start, form_line, index, line):
     return max(0, depth - 1), form_start, form_line
 
 
+def _skip_reader(source: str, index: int, line: int) -> tuple[int, int] | None:
+    ch = source[index]
+    if ch == ";":
+        return _consume_comment(source, index, line)
+    if ch == '"':
+        return _consume_string(source, index, line)
+    if ch == "\\":
+        return _char_literal_end(source, index), line
+    if source.startswith("#_", index):
+        end = _form_end(source, index + 2)
+        return end, line + source[index:end].count("\n")
+    return None
+
+
 def _extract_top_level_defns(source: str) -> list[dict]:
     forms: list[dict] = []
     index = 0
@@ -210,16 +377,11 @@ def _extract_top_level_defns(source: str) -> list[dict]:
     form_start = None
     form_line = None
     while index < len(source):
+        skipped = _skip_reader(source, index, line)
+        if skipped is not None:
+            index, line = skipped
+            continue
         ch = source[index]
-        if ch == ";":
-            index, line = _consume_comment(source, index, line)
-            continue
-        if ch == '"':
-            index, line = _consume_string(source, index, line)
-            continue
-        if ch == "\\":
-            index = _char_literal_end(source, index)
-            continue
         if ch == "(":
             if depth == 0:
                 form_start = index
@@ -250,8 +412,9 @@ def extract_functions(source: str) -> list[dict]:
 
 
 def declared_namespace(source: str) -> str | None:
+    clean = without_strings_and_comments(source)
     for pattern in (_NS, _IN_NS, _IN_NS_QUOTE):
-        match = pattern.search(source)
+        match = pattern.search(clean)
         if match:
             return match.group(1)
     return None
@@ -286,13 +449,3 @@ def functions_in_source(
         )
         for item in extract_functions(source)
     ]
-
-
-class Clojure(Language):
-    def functions(self, source: str, path: str, project_root: str) -> list[Function]:
-        return functions_in_source(source, path, project_root)
-
-
-class ClojureFactory(LanguageFactory):
-    def create(self) -> Language:
-        return Clojure()

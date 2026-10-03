@@ -1,8 +1,11 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from crapper.discover import is_test_file
 from crapper.runners import (
+    PackageJsonError,
     _clean_clojure,
     _clean_dir,
     _coverage_report,
@@ -29,6 +32,12 @@ from crapper.runners import (
 )
 
 
+def _as_text(command) -> str:
+    if isinstance(command, list):
+        return " ".join(command)
+    return command
+
+
 def _write(root: Path, relative: str, source: str) -> Path:
     path = root / relative
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -48,12 +57,13 @@ def test_vitest_uses_its_own_coverage_instead_of_c8(tmp_path):
     report_dir = tmp_path / "target" / "coverage" / "typescript"
     command = typescript_command(tmp_path, [source, tmp_path / "src" / "book.test.ts"], report_dir)
     assert command is not None
-    assert "c8" not in command
-    assert "vitest run --coverage" in command
-    assert "--coverage.reporter=lcov" in command
-    assert f"--coverage.reportsDirectory={report_dir}" in command
-    assert "--coverage.include=src/book.ts" in command
-    assert "book.test.ts" not in command
+    text = _as_text(command)
+    assert "c8" not in text
+    assert "vitest run --coverage" in text
+    assert "--coverage.reporter=lcov" in text
+    assert f"--coverage.reportsDirectory={report_dir}" in text
+    assert "--coverage.include=src/book.ts" in text
+    assert "book.test.ts" not in text
 
 
 def test_existing_coverage_script_is_left_alone(tmp_path):
@@ -63,14 +73,23 @@ def test_existing_coverage_script_is_left_alone(tmp_path):
         json.dumps({"scripts": {"coverage": "vitest run --coverage", "test": "vitest run"}}),
     )
     command = typescript_command(tmp_path, [], tmp_path / "coverage")
-    assert command == "npm run coverage"
+    assert command == ["npm", "run", "coverage"]
 
 
 def test_node_test_script_still_uses_c8(tmp_path):
     _write(tmp_path, "package.json", json.dumps({"scripts": {"test": "node --test"}}))
     report_dir = tmp_path / "target" / "coverage" / "typescript"
     command = typescript_command(tmp_path, [], report_dir)
-    assert command == f"npx --yes c8 --reporter=lcov --reports-dir {report_dir} npm test"
+    assert command == [
+        "npx",
+        "--yes",
+        "c8",
+        "--reporter=lcov",
+        "--reports-dir",
+        str(report_dir),
+        "npm",
+        "test",
+    ]
 
 
 def test_typescript_package_is_found_from_a_source_file(tmp_path):
@@ -112,10 +131,25 @@ def test_python_project_uses_pytest_and_coverage_lcov(tmp_path):
     data = tmp_path / "target" / "coverage" / "python" / ".coverage"
     report = data.parent / "lcov.info"
     run, lcov = python_coverage_commands("python3", "pytest", data, report, "src")
-    assert run == (
-        f"python3 -m coverage run --data-file={data} --source=src -m pytest"
-    )
-    assert lcov == f"python3 -m coverage lcov --data-file={data} -o {report}"
+    assert run == [
+        "python3",
+        "-m",
+        "coverage",
+        "run",
+        f"--data-file={data}",
+        "--source=src",
+        "-m",
+        "pytest",
+    ]
+    assert lcov == [
+        "python3",
+        "-m",
+        "coverage",
+        "lcov",
+        f"--data-file={data}",
+        "-o",
+        str(report),
+    ]
 
 
 def test_python_package_without_pytest_uses_unittest(tmp_path):
@@ -123,20 +157,21 @@ def test_python_package_without_pytest_uses_unittest(tmp_path):
     source = _write(tmp_path, "demo/app.py", "def run():\n    return 1\n")
     assert not uses_pytest(tmp_path)
     run, _lcov = python_coverage_commands("python3", "unittest", Path("data"), Path("out"), "demo")
-    assert "-m unittest discover -s ." in run
+    assert _as_text(run).endswith("-m unittest discover -s .")
     assert python_roots(tmp_path, [source]) == [tmp_path.resolve()]
 
 
 def test_rust_lcov_path_is_absolute():
     report = Path("/tmp/bookwriter/target/coverage/rust/src-tauri/lcov.info")
     command = rust_coverage_command("llvm-cov", report)
-    assert command == f"cargo llvm-cov --lcov --output-path {report}"
+    assert command == ["cargo", "llvm-cov", "--lcov", "--output-path", str(report)]
 
 
-def test_vitest_version_and_provider_install(tmp_path, monkeypatch):
+def test_vitest_version_and_provider_install(tmp_path, monkeypatch, capsys):
     assert _vitest_version(tmp_path) is None
     _write(tmp_path, "node_modules/vitest/package.json", "{not json")
     assert _vitest_version(tmp_path) is None
+    assert "package.json" in capsys.readouterr().err
     _write(tmp_path, "node_modules/vitest/package.json", '{"version": "4.1.11"}\n')
     assert _vitest_version(tmp_path) == "4.1.11"
     provider = tmp_path / "node_modules" / "@vitest" / "coverage-v8"
@@ -176,7 +211,7 @@ def test_rust_kind_installs_llvm_cov_when_it_is_missing(monkeypatch):
         return None
 
     def shell(command, cwd):
-        if "cargo install" in command:
+        if "cargo install" in _as_text(command):
             installed["llvm"] = True
         return 0
 
@@ -189,18 +224,19 @@ def test_rust_kind_installs_llvm_cov_when_it_is_missing(monkeypatch):
 
 
 def test_coverage_commands_are_issued_per_language(tmp_path, monkeypatch):
-    commands: list[str] = []
+    commands: list[str | list[str]] = []
 
     def shell(command, cwd):
         commands.append(command)
-        if "--data-file=" in command:
-            data = Path(command.split("--data-file=", 1)[1].split()[0])
+        text = _as_text(command)
+        if "--data-file=" in text:
+            data = Path(text.split("--data-file=", 1)[1].split()[0])
             data.parent.mkdir(parents=True, exist_ok=True)
             data.write_text("x", encoding="utf-8")
             return 1
-        if command.startswith("clj") or command.startswith("mvn") or command.startswith("go "):
+        if text.startswith("clj") or text.startswith("mvn") or text.startswith("go "):
             return 1
-        if "vitest" in command or command.startswith("cargo "):
+        if "vitest" in text or text.startswith("cargo "):
             return 1
         return 0
 
@@ -236,7 +272,7 @@ def test_coverage_commands_are_issued_per_language(tmp_path, monkeypatch):
         tmp_path / "src/lib.rs",
     ]
     run_coverage(tmp_path, files, None)
-    text = "\n".join(commands)
+    text = "\n".join(_as_text(command) for command in commands)
     assert "clj -M:cov --lcov" in text
     assert "clj -M:cov\n" in text or text.endswith("clj -M:cov") or "clj -M:cov" in text
     assert "mvn " in text
@@ -271,13 +307,22 @@ def test_run_shell_returns_the_child_status_and_reports_a_failed_start(tmp_path,
 
 
 def test_clean_removes_a_stale_directory_and_ignores_a_missing_one(tmp_path):
-    stale = tmp_path / "target" / "coverage" / "old"
+    coverage = tmp_path / "target" / "coverage"
+    stale = coverage / "old"
     stale.mkdir(parents=True)
-    (stale / "lcov.info").write_text("x", encoding="utf-8")
-    kept = tmp_path / "target" / "coverage" / "python"
+    (stale / "index.html").write_text("x", encoding="utf-8")
+    (coverage / "notes.txt").write_text("keep", encoding="utf-8")
+    nested = coverage / "notes"
+    nested.mkdir()
+    (nested / "keep.txt").write_text("x", encoding="utf-8")
+    kept = coverage / "python"
     kept.mkdir()
+    (kept / "index.html").write_text("py", encoding="utf-8")
     _clean_clojure(tmp_path)
     assert not stale.exists()
+    assert (coverage / "notes.txt").is_file()
+    assert (nested / "keep.txt").is_file()
+    assert (kept / "index.html").is_file()
     assert kept.is_dir()
     _clean_dir(tmp_path / "target" / "coverage")
     assert not (tmp_path / "target" / "coverage").exists()
@@ -288,9 +333,11 @@ def test_clean_removes_a_stale_directory_and_ignores_a_missing_one(tmp_path):
 def test_package_json_without_a_test_script_has_no_coverage_command(tmp_path):
     assert typescript_command(tmp_path, [], tmp_path / "cov") is None
     _write(tmp_path, "package.json", "{")
-    assert typescript_command(tmp_path, [], tmp_path / "cov") is None
+    with pytest.raises(PackageJsonError, match="package.json"):
+        typescript_command(tmp_path, [], tmp_path / "cov")
     _write(tmp_path, "package.json", "[]")
-    assert typescript_command(tmp_path, [], tmp_path / "cov") is None
+    with pytest.raises(PackageJsonError, match="expected a JSON object"):
+        typescript_command(tmp_path, [], tmp_path / "cov")
     _write(tmp_path, "package.json", '{"scripts": ["nope"]}')
     assert typescript_command(tmp_path, [], tmp_path / "cov") is None
 
@@ -344,13 +391,13 @@ def test_missing_python_module_is_installed(tmp_path, monkeypatch):
 
     def shell(command, _cwd):
         commands.append(command)
-        if command.startswith("python3 -c"):
+        if _as_text(command).startswith("python3 -c"):
             return 1
         return 0
 
     monkeypatch.setattr("crapper.runners.run_shell", shell)
     assert _ensure_python_module("python3", tmp_path, "coverage") is True
-    assert any("pip install" in command for command in commands)
+    assert any("pip install" in _as_text(command) for command in commands)
     commands.clear()
 
     def already(_command, _cwd):
@@ -431,3 +478,67 @@ def test_python_coverage_module_missing_is_reported(tmp_path, monkeypatch, capsy
     source = _write(tmp_path, "src/app.py", "def run():\n    return 1\n")
     run_coverage(tmp_path, [source], None)
     assert "coverage is missing" in capsys.readouterr().err
+
+
+def test_an_argument_vector_is_not_a_shell(tmp_path, monkeypatch):
+    seen = []
+
+    def fake(command, cwd, shell=False):
+        seen.append((command, shell))
+
+        class Done:
+            returncode = 0
+
+        return Done()
+
+    monkeypatch.setattr("crapper.runners.subprocess.run", fake)
+    assert run_shell("exit 3", tmp_path) == 0
+    marker = tmp_path / "pwned"
+    assert run_shell(["true", f"a;touch {marker}"], tmp_path) == 0
+    assert seen[0] == ("exit 3", True)
+    assert seen[1][1] is False
+    assert seen[1][0] == ["true", f"a;touch {marker}"]
+
+
+def test_an_argument_vector_cannot_run_a_second_command(tmp_path):
+    marker = tmp_path / "pwned"
+    assert run_shell(["true", f"a;touch {marker}"], tmp_path) == 0
+    assert not marker.exists()
+
+
+def test_go_coverprofile_stays_one_argument(tmp_path, monkeypatch):
+    root = tmp_path / "my module"
+    root.mkdir()
+    _write(root, "go.mod", "module example.com/demo\n")
+    source = _write(root, "board.go", "package demo\nfunc Place() int { return 1 }\n")
+    seen = []
+    monkeypatch.setattr("crapper.runners.run_shell", lambda command, cwd: seen.append(command) or 0)
+    run_coverage(root, [source], None)
+    command = seen[0]
+    assert command[:3] == ["go", "test", "./..."]
+    assert command[3].startswith("-coverprofile=")
+    assert " " in command[3]
+    assert len(command) == 4
+
+
+def test_invalid_package_json_is_not_a_missing_test_script(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("crapper.runners.run_shell", lambda *_args: 0)
+    _write(tmp_path, "package.json", "{ not json")
+    source = _write(tmp_path, "src/app.ts", "export const n = 1\n")
+    run_coverage(tmp_path, [source], None)
+    err = capsys.readouterr().err
+    assert "package.json" in err
+    assert "No package.json test script" not in err
+
+
+def test_vitest_install_restores_manifests_when_install_changes_them(tmp_path, monkeypatch):
+    package_json = tmp_path / "package.json"
+    package_json.write_bytes(b'{"name":"demo"}\n')
+
+    def shell(command, cwd):
+        package_json.write_bytes(b'{"name":"changed"}\n')
+        return 1
+
+    monkeypatch.setattr("crapper.runners.run_shell", shell)
+    assert _ensure_vitest_coverage(tmp_path) is False
+    assert package_json.read_bytes() == b'{"name":"demo"}\n'

@@ -5,7 +5,18 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
-DEPS='{:deps {uml-viewer/uml-viewer {:local/root "/Users/unclebob/projects/uml-viewer"} quil/quil {:mvn/version "4.3.1563"}}}'
+if [[ -n "${UML_VIEWER_ROOT:-}" ]]; then
+  VIEWER="$UML_VIEWER_ROOT"
+else
+  VIEWER="$ROOT/../uml-viewer"
+fi
+if [[ ! -d "$VIEWER" ]]; then
+  echo "uml-viewer checkout not found at $VIEWER" >&2
+  echo "Set UML_VIEWER_ROOT to the checkout." >&2
+  exit 1
+fi
+VIEWER="$(cd "$VIEWER" && pwd)"
+DEPS="{:deps {uml-viewer/uml-viewer {:local/root \"$VIEWER\"} quil/quil {:mvn/version \"4.3.1563\"}}}"
 
 edn_path() {
   local name base f

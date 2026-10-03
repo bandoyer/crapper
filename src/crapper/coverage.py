@@ -60,6 +60,129 @@ def suffix_match(path: str, suffix: str) -> bool:
     return path_parts[-len(suffix_parts) :] == suffix_parts
 
 
+def _key_items(keys: list[str]) -> list[tuple[str, str]]:
+    return [(key, normalize_path(key)) for key in keys]
+
+
+def _exact_key(items: list[tuple[str, str]], candidates: list[str]) -> str | None:
+    for candidate in candidates:
+        for original, norm in items:
+            if norm == candidate:
+                return original
+    return None
+
+
+def _nonempty_parts(candidates: list[str]) -> list[tuple[str, list[str]]]:
+    found = []
+    for candidate in candidates:
+        parts = _segments(candidate)
+        if parts:
+            found.append((candidate, parts))
+    return found
+
+
+def _key_has_suffix(key_parts: list[str], parts: list[str]) -> bool:
+    if len(key_parts) < len(parts):
+        return False
+    return key_parts[-len(parts) :] == parts
+
+
+def _forward_matches(
+    items: list[tuple[str, str]],
+    parts_of: list[tuple[str, list[str]]],
+    source_parts: list[tuple[str, ...]],
+) -> list[str]:
+    forward: list[tuple[int, str]] = []
+    for _candidate, parts in parts_of:
+        for original, norm in items:
+            key_parts = _segments(norm)
+            if not _key_has_suffix(key_parts, parts):
+                continue
+            if _longer_source_owns(key_parts, len(parts), source_parts):
+                continue
+            forward.append((len(key_parts) - len(parts), original))
+    if not forward:
+        return []
+    smallest = min(extra for extra, _key in forward)
+    return list(dict.fromkeys(key for extra, key in forward if extra == smallest))
+
+
+def _key_is_proper_suffix(parts: list[str], key_parts: list[str]) -> bool:
+    if not key_parts or len(key_parts) >= len(parts):
+        return False
+    return parts[-len(key_parts) :] == key_parts
+
+
+def _reverse_key(
+    items: list[tuple[str, str]],
+    parts_of: list[tuple[str, list[str]]],
+    source_parts: list[tuple[str, ...]],
+) -> str | None:
+    own = {tuple(parts) for _candidate, parts in parts_of}
+    reverse: list[str] = []
+    for _candidate, parts in parts_of:
+        for original, norm in items:
+            key_parts = _segments(norm)
+            if not _key_is_proper_suffix(parts, key_parts):
+                continue
+            if _another_source_ends_with(key_parts, source_parts, own):
+                continue
+            reverse.append(original)
+    unique = list(dict.fromkeys(reverse))
+    if len(unique) == 1:
+        return unique[0]
+    return None
+
+
+def _select_key(
+    keys: list[str], source_path: str, source_parts: list[tuple[str, ...]]
+) -> str | None:
+    """Report key for one source file.
+
+    An exact path wins. A report path may be the source path plus a prefix
+    (`proj/src/a.go` for `src/a.go`). It is not a match when another source
+    file is a longer suffix of that key, so `b/main.go` does not take
+    `a/b/main.go`.
+    """
+
+    items = _key_items(keys)
+    candidates = _candidates(source_path)
+    exact = _exact_key(items, candidates)
+    if exact is not None:
+        return exact
+    parts_of = _nonempty_parts(candidates)
+    forward = _forward_matches(items, parts_of, source_parts)
+    if len(forward) == 1:
+        return forward[0]
+    if forward:
+        return None
+    return _reverse_key(items, parts_of, source_parts)
+
+
+def _longer_source_owns(
+    key_parts: list[str], source_len: int, source_parts: list[tuple[str, ...]]
+) -> bool:
+    for other in source_parts:
+        if len(other) <= source_len:
+            continue
+        if len(other) <= len(key_parts) and key_parts[-len(other) :] == list(other):
+            return True
+    return False
+
+
+def _another_source_ends_with(
+    key_parts: list[str],
+    source_parts: list[tuple[str, ...]],
+    own: set[tuple[str, ...]],
+) -> bool:
+    for other in source_parts:
+        if other in own or len(other) < len(key_parts):
+            continue
+        if list(other[-len(key_parts) :]) == key_parts:
+            return True
+    return False
+
+
 def _candidates(source_path: str) -> list[str]:
     relative = normalize_path(source_path)
     absolute = normalize_path(str(Path(source_path).resolve())) if source_path else relative
@@ -119,6 +242,22 @@ def _add_branch(record: FileCoverage, line: int, taken: str) -> None:
     record.branches[line] = (covered + (1 if _branch_hit(taken) else 0), total + 1)
 
 
+def _store_lcov(out: dict[str, FileCoverage], current_file: str | None, current: FileCoverage) -> None:
+    if current_file is not None:
+        out[current_file] = current
+
+
+def _read_lcov_line(current: FileCoverage, line: str) -> None:
+    match = _LCOV_DA.match(line)
+    if match:
+        hits = int(match.group(2))
+        current[int(match.group(1))] = (1 if hits > 0 else 0, 1)
+        return
+    branch = _LCOV_BRDA.match(line)
+    if branch:
+        _add_branch(current, int(branch.group(1)), branch.group(4))
+
+
 def parse_lcov(text: str) -> dict[str, FileCoverage]:
     out: dict[str, FileCoverage] = {}
     current_file = None
@@ -126,26 +265,16 @@ def parse_lcov(text: str) -> dict[str, FileCoverage]:
     for raw in text.splitlines():
         line = raw.strip()
         if line.startswith("SF:"):
-            if current_file is not None:
-                out[current_file] = current
+            _store_lcov(out, current_file, current)
             current_file = line[3:]
             current = FileCoverage()
         elif line == "end_of_record":
-            if current_file is not None:
-                out[current_file] = current
+            _store_lcov(out, current_file, current)
             current_file = None
             current = FileCoverage()
         elif current_file is not None:
-            match = _LCOV_DA.match(line)
-            if match:
-                hits = int(match.group(2))
-                current[int(match.group(1))] = (1 if hits > 0 else 0, 1)
-                continue
-            branch = _LCOV_BRDA.match(line)
-            if branch:
-                _add_branch(current, int(branch.group(1)), branch.group(4))
-    if current_file is not None:
-        out[current_file] = current
+            _read_lcov_line(current, line)
+    _store_lcov(out, current_file, current)
     return out
 
 
@@ -189,18 +318,13 @@ def parse_go_profile(text: str) -> dict[str, list[tuple[int, int, int, int]]]:
     return out
 
 
-def _profile_segments(profile, path: str):
+def _profile_segments(profile, path: str, source_parts: list[tuple[str, ...]] | None = None):
     if profile is None:
         return None
-    for candidate in _candidates(path):
-        for key, value in profile.items():
-            if (
-                normalize_path(key) == candidate
-                or suffix_match(key, candidate)
-                or suffix_match(candidate, key)
-            ):
-                return value
-    return None
+    key = _select_key(list(profile), path, source_parts or [])
+    if key is None:
+        return None
+    return profile[key]
 
 
 def go_percent(
@@ -208,8 +332,9 @@ def go_percent(
     path: str,
     start: int,
     end: int,
+    source_parts: list[tuple[str, ...]] | None = None,
 ) -> float | None:
-    segments = _profile_segments(profile, path)
+    segments = _profile_segments(profile, path, source_parts)
     if segments is None:
         return None
     total = 0
@@ -250,6 +375,36 @@ def _jacoco_from_index(classes, class_names, method_name, line) -> float | None:
     return nearest.percent
 
 
+def _instruction_counter(method):
+    for child in list(method):
+        if child.tag == "counter" and child.get("type") == "INSTRUCTION":
+            return child
+    return None
+
+
+def _method_line(method) -> int:
+    try:
+        return int(method.get("line") or "0")
+    except ValueError:
+        return 0
+
+
+def _record_jacoco_method(found: dict[str, list[JacocoMethod]], class_name: str, method) -> None:
+    if method.tag != "method":
+        return
+    counter = _instruction_counter(method)
+    if counter is None:
+        return
+    key = f"{class_name}#{method.get('name', '')}"
+    found.setdefault(key, []).append(
+        JacocoMethod(
+            missed=int(counter.get("missed") or "0"),
+            covered=int(counter.get("covered") or "0"),
+            line=_method_line(method),
+        )
+    )
+
+
 def parse_jacoco_index(text: str) -> dict[str, list[JacocoMethod]]:
     """Key methods as `binary.class.name#method`."""
 
@@ -259,30 +414,7 @@ def parse_jacoco_index(text: str) -> dict[str, list[JacocoMethod]]:
     for class_node in root.iter("class"):
         class_name = class_node.get("name", "").replace("/", ".")
         for method in list(class_node):
-            if method.tag != "method":
-                continue
-            counter = next(
-                (
-                    child
-                    for child in list(method)
-                    if child.tag == "counter" and child.get("type") == "INSTRUCTION"
-                ),
-                None,
-            )
-            if counter is None:
-                continue
-            try:
-                line = int(method.get("line") or "0")
-            except ValueError:
-                line = 0
-            key = f"{class_name}#{method.get('name', '')}"
-            found.setdefault(key, []).append(
-                JacocoMethod(
-                    missed=int(counter.get("missed") or "0"),
-                    covered=int(counter.get("covered") or "0"),
-                    line=line,
-                )
-            )
+            _record_jacoco_method(found, class_name, method)
     return found
 
 
@@ -292,6 +424,20 @@ class CoverageBundle:
     go_profile: dict[str, list[tuple[int, int, int, int]]] | None = None
     jacoco: dict[str, list[JacocoMethod]] | None = None
     form_html: dict[str, dict[int, tuple[int, int]]] = field(default_factory=dict)
+    source_parts: list[tuple[str, ...]] = field(default_factory=list)
+
+    def bind_sources(self, paths: list[str]) -> None:
+        """Remember project files so a short path cannot take a longer file's report."""
+
+        found: list[tuple[str, ...]] = []
+        seen: set[tuple[str, ...]] = set()
+        for source in paths:
+            for candidate in _candidates(source):
+                parts = tuple(_segments(candidate))
+                if parts and parts not in seen:
+                    seen.add(parts)
+                    found.append(parts)
+        self.source_parts = found
 
     def percent_for(self, function: Function) -> float | None:
         if function.language == "java":
@@ -305,7 +451,11 @@ class CoverageBundle:
             )
         if function.language == "go":
             return go_percent(
-                self.go_profile, function.path, function.start_line, function.end_line
+                self.go_profile,
+                function.path,
+                function.start_line,
+                function.end_line,
+                self.source_parts,
             )
         html = self._html_lines(function.path)
         if html is not None:
@@ -319,23 +469,19 @@ class CoverageBundle:
         return percent_for_range(record, function.start_line, function.end_line)
 
     def _html_lines(self, path: str) -> dict[int, tuple[int, int]] | None:
-        return _lookup(self.form_html, path)
+        return _lookup(self.form_html, path, self.source_parts)
 
     def _lcov_lines(self, path: str) -> dict[int, tuple[int, int]] | None:
-        return _lookup(self.lcov, path)
+        return _lookup(self.lcov, path, self.source_parts)
 
 
-def _lookup(index: dict[str, dict], source_path: str):
+def _lookup(index: dict[str, dict], source_path: str, source_parts: list[tuple[str, ...]]):
     if not index:
         return None
-    normalized = {normalize_path(key): value for key, value in index.items()}
-    for candidate in _candidates(source_path):
-        if candidate in normalized:
-            return normalized[candidate]
-    for key, value in normalized.items():
-        if any(suffix_match(key, candidate) for candidate in _candidates(source_path)):
-            return value
-    return None
+    key = _select_key(list(index), source_path, source_parts)
+    if key is None:
+        return None
+    return index[key]
 
 
 def _read(path: Path) -> str | None:
@@ -345,14 +491,7 @@ def _read(path: Path) -> str | None:
 
 
 def _lcov_paths(root: Path) -> list[Path]:
-    paths = [
-        root / "target" / "coverage" / "lcov.info",
-        root / "coverage" / "lcov.info",
-        root / "target" / "coverage" / "typescript" / "lcov.info",
-        root / "target" / "coverage" / "rust" / "lcov.info",
-        root / "target" / "coverage" / "python" / "lcov.info",
-    ]
-    paths.extend(root.glob("target/coverage/**/lcov.info"))
+    paths = list(root.glob("target/coverage/**/lcov.info"))
     paths.extend(root.glob("coverage/**/lcov.info"))
     return paths
 
@@ -414,8 +553,7 @@ def _merge_forms(root: Path) -> dict[str, dict[int, tuple[int, int]]]:
         if not text or "forms covered" not in text:
             continue
         relative = html_path.relative_to(coverage_dir).as_posix()
-        if relative.endswith(".html"):
-            relative = relative[: -len(".html")]
+        relative = relative[: -len(".html")]
         found[relative] = parse_form_coverage(text)
     return found
 

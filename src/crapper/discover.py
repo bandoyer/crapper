@@ -44,6 +44,27 @@ SKIP_DIRS = {
 
 TEST_DIRS = {"test", "tests", "spec", "specs", "__tests__"}
 
+GO_TEST_SUFFIX = "_test.go"
+CLOJURE_TEST_SUFFIXES = ("_test.clj", "_test.cljc", "_test.cljs", "_test.bb")
+JS_TEST_SUFFIXES = (
+    ".test.ts",
+    ".spec.ts",
+    ".test.tsx",
+    ".spec.tsx",
+    ".test.mts",
+    ".spec.mts",
+    ".test.cts",
+    ".spec.cts",
+    ".test.js",
+    ".spec.js",
+    ".test.jsx",
+    ".spec.jsx",
+    ".test.mjs",
+    ".spec.mjs",
+    ".test.cjs",
+    ".spec.cjs",
+)
+
 
 def language_of(path: str | Path) -> str | None:
     file_path = Path(path)
@@ -56,28 +77,11 @@ def language_of(path: str | Path) -> str | None:
 def is_test_file(path: str | Path) -> bool:
     file_path = Path(path)
     name = file_path.name
-    if name.endswith("_test.go"):
+    if name.endswith(GO_TEST_SUFFIX):
         return True
-    if name.endswith(("_test.clj", "_test.cljc", "_test.cljs", "_test.bb")):
+    if name.endswith(CLOJURE_TEST_SUFFIXES):
         return True
-    if name.endswith(
-        (
-            ".test.ts",
-            ".spec.ts",
-            ".test.tsx",
-            ".spec.tsx",
-            ".test.mts",
-            ".spec.mts",
-            ".test.js",
-            ".spec.js",
-            ".test.jsx",
-            ".spec.jsx",
-            ".test.mjs",
-            ".spec.mjs",
-            ".test.cjs",
-            ".spec.cjs",
-        )
-    ):
+    if name.endswith(JS_TEST_SUFFIXES):
         return True
     if name == "conftest.py":
         return True

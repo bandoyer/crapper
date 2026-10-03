@@ -1,6 +1,7 @@
 """Shared tree-sitter helpers for Java, Go, TypeScript, Rust, and Python."""
 
 from functools import lru_cache
+from pathlib import Path
 
 
 @lru_cache(maxsize=None)
@@ -47,18 +48,32 @@ def descendants(node):
         stack.extend(reversed(current.children))
 
 
+def absolute_path(path: str, project_root: str | None) -> str:
+    file_path = Path(path)
+    if file_path.is_absolute():
+        return str(file_path)
+    if project_root:
+        return str((Path(project_root) / file_path).resolve())
+    return str(file_path.resolve())
+
+
 def complexity(node, is_decision, skip) -> int:
-    """McCabe complexity of `node`: 1 plus each decision in the subtree."""
+    """McCabe complexity of `node`: 1 plus each decision in the subtree.
 
-    def walk(current) -> int:
+    The walk is a stack, not recursion. A generated expression can be deeper
+    than Python's call limit.
+    """
+
+    score = 1
+    stack = [node]
+    while stack:
+        current = stack.pop()
         if skip(current):
-            return 0
-        score = 1 if is_decision(current) else 0
-        for child in current.children:
-            score += walk(child)
-        return score
-
-    return 1 + walk(node)
+            continue
+        if is_decision(current):
+            score += 1
+        stack.extend(reversed(current.children))
+    return score
 
 
 def binary_logic(node) -> bool:
