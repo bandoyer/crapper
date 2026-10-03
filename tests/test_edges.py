@@ -145,6 +145,8 @@ def test_load_bundle_on_an_empty_tree_has_no_profiles(tmp_path):
 
 def test_conftest_and_a_tests_directory_are_tests(tmp_path):
     assert is_test_file("conftest.py") is True
+    assert is_test_file("src/app.test.js") is True
+    assert is_test_file("src/app.spec.mjs") is True
     assert is_test_file(tmp_path / "tests" / "test_board.py") is True
     source = tmp_path / "src" / "app.py"
     source.parent.mkdir(parents=True)
@@ -158,6 +160,24 @@ def test_conftest_and_a_tests_directory_are_tests(tmp_path):
     assert iter_source_files([tmp_path]) == [source.resolve()]
     assert iter_source_files([tmp_path / "missing"]) == []
     assert iter_source_files([source]) == [source.resolve()]
+
+
+def test_missing_coverage_scores_zero_and_sorts_ahead_of_a_covered_function(tmp_path):
+    low = tmp_path / "src" / "low.ts"
+    high = tmp_path / "src" / "high.ts"
+    low.parent.mkdir(parents=True)
+    body = "export function {name}(x: number) {{\n  if (x) return 1;\n  return 0;\n}}\n"
+    low.write_text(body.format(name="low"), encoding="utf-8")
+    high.write_text(body.format(name="high"), encoding="utf-8")
+    bundle = CoverageBundle(lcov={"src/low.ts": {1: (1, 1), 2: (1, 1), 3: (1, 1)}})
+    entries = analyze_files([low, high], tmp_path, bundle)
+    assert [(entry.name, entry.coverage, entry.crap) for entry in entries] == [
+        ("high", 0.0, 6.0),
+        ("low", 100.0, 2.0),
+    ]
+    unscored = analyze_files([high], tmp_path, None)
+    assert unscored[0].coverage is None
+    assert unscored[0].crap is None
 
 
 def test_files_outside_the_project_keep_an_absolute_path(tmp_path):

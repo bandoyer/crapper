@@ -14,6 +14,10 @@ def test_language_detection():
     assert language_of("Widget.java") == "java"
     assert language_of("board.go") == "go"
     assert language_of("ui/view.tsx") == "typescript"
+    assert language_of("src/app.js") == "typescript"
+    assert language_of("src/app.mjs") == "typescript"
+    assert language_of("src/app.cjs") == "typescript"
+    assert language_of("src/app.jsx") == "typescript"
     assert language_of("src/lib.rs") == "rust"
     assert language_of("src/crapper/cli.py") == "python"
     assert language_of("types.d.ts") is None

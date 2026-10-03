@@ -22,7 +22,8 @@ CRAP = CC² × (1 − coverage)³ + CC. Writes .metrics/crap.edn for uml-viewer
 and prints a report sorted worst first.
 
 Languages: Clojure (.clj .cljc .cljs .bb), Java (.java), Go (.go),
-TypeScript (.ts .tsx .mts .cts), Rust (.rs), Python (.py).
+TypeScript and JavaScript (.ts .tsx .mts .cts .js .jsx .mjs .cjs),
+Rust (.rs), Python (.py).
 
 Options:
   -h, --help                    Print this help and exit.

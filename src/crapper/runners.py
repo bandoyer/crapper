@@ -1,7 +1,7 @@
 """Run each language's coverage tool, then leave the reports for the loader.
 
 Failures are reported and do not stop analysis. A language with no coverage
-tool, or a failed run, keeps N/A coverage for its functions.
+tool, or a failed run, scores its functions at 0%.
 """
 
 from __future__ import annotations
@@ -139,7 +139,7 @@ def _ensure_vitest_coverage(package: Path) -> bool:
     _restore_manifests(snapshot)
     ready = code == 0 and (package / "node_modules" / "@vitest" / "coverage-v8").is_dir()
     if not ready:
-        _warn("Vitest's coverage provider is missing. TypeScript coverage will be N/A.")
+        _warn("Vitest's coverage provider is missing. TypeScript coverage will score 0%.")
     return ready
 
 
@@ -236,7 +236,7 @@ def _rust_kind() -> str | None:
     code = run_shell("cargo install cargo-llvm-cov --locked", Path.home())
     if code == 0 and shutil.which("cargo-llvm-cov"):
         return "llvm-cov"
-    _warn("Rust coverage will be N/A.")
+    _warn("Rust coverage will score 0%.")
     return None
 
 
@@ -359,7 +359,7 @@ def _cover_clojure(root: Path) -> None:
         _warn("clj -M:cov --lcov failed; retrying without --lcov.")
         code = run_shell("clj -M:cov", root)
     if code != 0:
-        _warn(f"Clojure coverage exited {code}. Clojure coverage will be N/A.")
+        _warn(f"Clojure coverage exited {code}. Clojure coverage will score 0%.")
 
 
 def _cover_java(root: Path, files: list[Path]) -> None:
@@ -374,7 +374,7 @@ def _cover_java(root: Path, files: list[Path]) -> None:
             exec_file.unlink()
         code = run_shell(_MAVEN, module)
         if code != 0:
-            _warn(f"Java coverage exited {code} in {module}. Java coverage will be N/A.")
+            _warn(f"Java coverage exited {code} in {module}. Java coverage will score 0%.")
 
 
 def _cover_go(root: Path, files: list[Path]) -> None:
@@ -389,7 +389,7 @@ def _cover_go(root: Path, files: list[Path]) -> None:
             profile.unlink()
         code = run_shell(f"go test ./... -coverprofile={profile}", module)
         if code != 0:
-            _warn(f"Go coverage exited {code} in {module}. Go coverage will be N/A.")
+            _warn(f"Go coverage exited {code} in {module}. Go coverage will score 0%.")
 
 
 def _prepare_report(report: Path) -> None:
@@ -414,7 +414,7 @@ def _cover_typescript(root: Path, files: list[Path]) -> None:
         _prepare_report(report)
         code = run_shell(command, package)
         if code != 0:
-            _warn(f"TypeScript coverage exited {code} in {package}. TypeScript coverage will be N/A.")
+            _warn(f"TypeScript coverage exited {code} in {package}. TypeScript coverage will score 0%.")
 
 
 def _needs_vitest_provider(command: str) -> bool:
@@ -433,11 +433,11 @@ def _python_kind(py: str, package: Path) -> str:
 def _record_python_lcov(package: Path, code: int, data_file: Path, lcov_cmd: str) -> None:
     if not data_file.exists():
         if code != 0:
-            _warn(f"Python coverage exited {code} in {package}. Python coverage will be N/A.")
+            _warn(f"Python coverage exited {code} in {package}. Python coverage will score 0%.")
         return
     lcov_code = run_shell(lcov_cmd, package)
     if lcov_code != 0:
-        _warn(f"coverage lcov exited {lcov_code} in {package}. Python coverage will be N/A.")
+        _warn(f"coverage lcov exited {lcov_code} in {package}. Python coverage will score 0%.")
     elif code != 0:
         _warn(f"Python tests exited {code} in {package}. Coverage was still recorded.")
 
@@ -447,7 +447,7 @@ def _cover_python(root: Path, files: list[Path]) -> None:
         report = _coverage_report(root, package, "python")
         py = _python_executable(package)
         if not _ensure_python_module(py, package, "coverage"):
-            _warn(f"coverage is missing in {package}. Python coverage will be N/A.")
+            _warn(f"coverage is missing in {package}. Python coverage will score 0%.")
             continue
         report.parent.mkdir(parents=True, exist_ok=True)
         data_file = report.parent / ".coverage"
@@ -473,7 +473,7 @@ def _cover_rust(root: Path, files: list[Path]) -> None:
         report.unlink(missing_ok=True)
         code = run_shell(rust_coverage_command(kind, report), module)
         if code != 0:
-            _warn(f"Rust coverage exited {code} in {module}. Rust coverage will be N/A.")
+            _warn(f"Rust coverage exited {code} in {module}. Rust coverage will score 0%.")
 
 
 def run_coverage(root: Path, files: list[Path], command: str | None) -> None:
@@ -483,7 +483,7 @@ def run_coverage(root: Path, files: list[Path], command: str | None) -> None:
     if command:
         code = run_shell(command, root)
         if code != 0:
-            _warn(f"Coverage command exited {code}. Coverage may be N/A.")
+            _warn(f"Coverage command exited {code}. Coverage may score 0%.")
         return
 
     languages = _languages_in(files)

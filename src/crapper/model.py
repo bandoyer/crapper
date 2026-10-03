@@ -13,6 +13,10 @@ class Function:
     path: str
     language: str
     jacoco_class: str | None = None
+    # UTF-8 byte span of the function. -1 when the language does not record it.
+    # Mutator uses the span to give a nested handler the sites inside it.
+    start_byte: int = -1
+    end_byte: int = -1
 
 
 @dataclass(frozen=True)

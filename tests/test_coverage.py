@@ -42,6 +42,29 @@ def test_lcov_percentage_when_there_is_no_html():
     assert bundle.percent_for(function(path="src/missing.clj")) is None
 
 
+def test_lcov_branch_records_override_line_hits():
+    text = "SF:src/demo/app.ts\nDA:2,1\nDA:3,1\nBRDA:3,0,0,1\nBRDA:3,0,1,-\nend_of_record\n"
+    parsed = parse_lcov(text)
+    assert parsed["src/demo/app.ts"][2] == (1, 1)
+    assert parsed["src/demo/app.ts"].branches[3] == (1, 2)
+    bundle = CoverageBundle(lcov=parsed)
+    scored = function(
+        path="src/demo/app.ts",
+        language="typescript",
+        start_line=2,
+        end_line=3,
+        namespace="demo.app",
+    )
+    assert bundle.percent_for(scored) == 50.0
+
+
+def test_a_branchless_span_keeps_line_coverage():
+    text = "SF:src/demo/app.ts\nDA:2,1\nDA:3,0\nBRDA:8,0,0,1\nBRDA:8,0,1,0\nend_of_record\n"
+    bundle = CoverageBundle(lcov=parse_lcov(text))
+    scored = function(path="src/demo/app.ts", language="typescript", start_line=2, end_line=3)
+    assert bundle.percent_for(scored) == 50.0
+
+
 def test_go_profile_matches_crap4go_statement_ranges():
     profile = parse_go_profile(
         "mode: set\ngithub.com/acme/demo/board.go:4.1,6.2 2 1\ngithub.com/acme/demo/board.go:8.1,9.2 1 0\n"

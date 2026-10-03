@@ -51,3 +51,84 @@ export function View(ok: boolean, ready: boolean) {
     assert [(fn.namespace, fn.name, fn.complexity) for fn in functions] == [
         ("ui.view", "View", 3)
     ]
+
+
+def test_nullish_and_optional_chains_are_branches():
+    source = """
+export function choose(a, b, c) {
+  return a ?? b?.c ?? c?.() ?? c?.[0];
+}
+export function text() {
+  return "a ?? b?.c";
+}
+"""
+    functions = functions_in_source(source, "src/demo/box.ts", "/proj")
+    assert [(fn.name, fn.complexity) for fn in functions] == [
+        ("choose", 7),
+        ("text", 1),
+    ]
+
+
+def test_express_handlers_are_entries_and_leave_the_parent():
+    source = """
+export function mount(app) {
+  const extra = [1].map((n) => (n ? 1 : 0));
+  app.get("/users", (req, res) => {
+    if (req.query.q) return 1;
+    return 0;
+  });
+  app.post("/users", function (req, res) {
+    return req.body ?? {};
+  });
+  app.use((req, res, next) => next());
+  app.route("/items").get((req, res) => res.send(1)).post((req, res) => res.send(2));
+  return extra;
+}
+app.get("/health", async (req, res) => res.send(req.query.ok ?? "no"));
+app.get("/users", (req, res, next) => next(), (req, res) => res.send(req.id ?? 0));
+app.delete(`/users/${id}`, ((req, res) => res.send(1)));
+"""
+    functions = functions_in_source(source, "src/demo/routes.ts", "/proj")
+    assert [(fn.name, fn.complexity) for fn in functions] == [
+        ("mount", 2),
+        ("GET /users", 2),
+        ("POST /users", 2),
+        ("USE", 1),
+        ("GET /items", 1),
+        ("POST /items", 1),
+        ("GET /health", 2),
+        ("GET /users#2", 1),
+        ("GET /users#3", 2),
+        ("DELETE /users/${id}", 1),
+    ]
+    assert {fn.namespace for fn in functions} == {"demo.routes"}
+
+
+def test_a_nested_callback_that_is_not_a_route_stays_inside_its_function():
+    source = """
+function outer() {
+  const values = [1].map((n) => (n ? 1 : 0));
+  return values;
+}
+"""
+    functions = functions_in_source(source, "src/demo/box.ts", "/proj")
+    assert [(fn.name, fn.complexity) for fn in functions] == [("outer", 2)]
+
+
+def test_javascript_files_use_the_same_rules():
+    source = """
+export function choose(a, b, c) {
+  return a ?? b?.c ?? c?.() ?? c?.[0];
+}
+app.get("/users", (req, res) => req.id ?? 0);
+"""
+    functions = functions_in_source(source, "src/demo/app.mjs", "/proj")
+    assert [(fn.namespace, fn.name, fn.complexity) for fn in functions] == [
+        ("demo.app", "choose", 7),
+        ("demo.app", "GET /users", 2),
+    ]
+    js = functions_in_source(source, "src/demo/app.js", "/proj")
+    assert [(fn.name, fn.complexity) for fn in js] == [
+        ("choose", 7),
+        ("GET /users", 2),
+    ]

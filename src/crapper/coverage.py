@@ -1,8 +1,9 @@
 """Load Cloverage, LCOV, JaCoCo, and Go coverage profiles.
 
 Clojure prefers Cloverage's per-line form counts, then LCOV. Java uses JaCoCo
-instruction counters. Go uses statement profiles. TypeScript and Rust use LCOV
-line hits. A file with no coverage data scores N/A rather than 0%.
+instruction counters. Go uses statement profiles. LCOV scores a function by
+its BRDA branch records when it has any, and by line hits otherwise.
+`percent_for` returns None when the file is absent; analysis turns that into 0%.
 """
 
 from __future__ import annotations
@@ -19,7 +20,21 @@ _SPAN = re.compile(
     r'<span[^>]*title="(\d+) out of (\d+) forms covered"[^>]*>\s*(\d+)&nbsp;'
 )
 _LCOV_DA = re.compile(r"DA:(\d+),(\d+)")
+_LCOV_BRDA = re.compile(r"BRDA:(\d+),([^,]*),([^,]*),(-|\d+)")
 _DOCTYPE = re.compile(r"<!DOCTYPE[^>]*>", re.IGNORECASE)
+
+
+class FileCoverage(dict):
+    """Line hits for one file, plus branch hits keyed by line.
+
+    The mapping itself is `line → (covered, total)` from `DA` records, so
+    existing callers can keep indexing it. `branches` aggregates each `BRDA`
+    record on that line as one branch.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.branches: dict[int, tuple[int, int]] = {}
 
 
 def normalize_path(path: str) -> str:
@@ -90,30 +105,67 @@ def parse_form_coverage(html: str) -> dict[int, tuple[int, int]]:
     return found
 
 
-def parse_lcov(text: str) -> dict[str, dict[int, tuple[int, int]]]:
-    out: dict[str, dict[int, tuple[int, int]]] = {}
+def _branch_hit(taken: str) -> bool:
+    if taken == "-":
+        return False
+    try:
+        return int(taken) > 0
+    except ValueError:
+        return False
+
+
+def _add_branch(record: FileCoverage, line: int, taken: str) -> None:
+    covered, total = record.branches.get(line, (0, 0))
+    record.branches[line] = (covered + (1 if _branch_hit(taken) else 0), total + 1)
+
+
+def parse_lcov(text: str) -> dict[str, FileCoverage]:
+    out: dict[str, FileCoverage] = {}
     current_file = None
-    current: dict[int, tuple[int, int]] = {}
+    current = FileCoverage()
     for raw in text.splitlines():
         line = raw.strip()
         if line.startswith("SF:"):
             if current_file is not None:
                 out[current_file] = current
             current_file = line[3:]
-            current = {}
+            current = FileCoverage()
         elif line == "end_of_record":
             if current_file is not None:
                 out[current_file] = current
             current_file = None
-            current = {}
+            current = FileCoverage()
         elif current_file is not None:
             match = _LCOV_DA.match(line)
             if match:
                 hits = int(match.group(2))
                 current[int(match.group(1))] = (1 if hits > 0 else 0, 1)
+                continue
+            branch = _LCOV_BRDA.match(line)
+            if branch:
+                _add_branch(current, int(branch.group(1)), branch.group(4))
     if current_file is not None:
         out[current_file] = current
     return out
+
+
+def branch_percent(record, start: int, end: int) -> float | None:
+    """Branch coverage for a function, or None when that span has no branches."""
+
+    branches = getattr(record, "branches", None)
+    if not branches:
+        return None
+    covered = 0
+    total = 0
+    for line in range(start, end + 1):
+        entry = branches.get(line)
+        if entry is None:
+            continue
+        covered += entry[0]
+        total += entry[1]
+    if total == 0:
+        return None
+    return coverage_percent(covered, total)
 
 
 def parse_go_profile(text: str) -> dict[str, list[tuple[int, int, int, int]]]:
@@ -258,9 +310,13 @@ class CoverageBundle:
         html = self._html_lines(function.path)
         if html is not None:
             return percent_for_range(html, function.start_line, function.end_line)
-        return percent_for_range(
-            self._lcov_lines(function.path), function.start_line, function.end_line
-        )
+        record = self._lcov_lines(function.path)
+        if record is None:
+            return None
+        branched = branch_percent(record, function.start_line, function.end_line)
+        if branched is not None:
+            return branched
+        return percent_for_range(record, function.start_line, function.end_line)
 
     def _html_lines(self, path: str) -> dict[int, tuple[int, int]] | None:
         return _lookup(self.form_html, path)
