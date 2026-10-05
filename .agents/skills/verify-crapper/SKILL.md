@@ -5,7 +5,7 @@ description: Drive this checkout's crapper CLI against a scratch project (a buil
 
 # Verify crapper
 
-crapper is a command-line CRAP scorer. The only surface is the `./crapper` launcher at the repo root. Run from a project root, it finds source files, runs each language's coverage tool, reads the coverage reports, prints a table worst score first, and writes `.metrics/crap.edn`. A drive never runs against a real project folder: every drive uses a scratch project, because a default run deletes and rewrites coverage reports in the project.
+crapper is a command-line CRAP scorer. Its surface is the `./crapper` launcher at the repo root, plus `./uml`, which starts uml-viewer ([features/uml-launcher.md](features/uml-launcher.md)). Run from a project root, it finds source files, runs each language's coverage tool, reads the coverage reports, prints a table worst score first, and writes `.metrics/crap.edn`. A drive never runs against a real project folder: every drive uses a scratch project, because a default run deletes and rewrites coverage reports in the project.
 
 All commands below use the helper at `.agents/skills/verify-crapper/bin/verify-crapper`. Run it from the repo root; call it `vc` for short:
 
@@ -60,7 +60,7 @@ The features you can drive, and the end state that proves each one, are in [feat
 
 - Put transcripts where the caller asks, for example `<run folder>/artifacts/verify/round-1/criterion-1.txt`. Never put them inside the scratch project: cleanup removes it.
 - Proof is the transcript: the action (command), what the user saw (the table, stderr, exit code), and the side effects (reports before and after, the snapshot, tracked files). Check all three.
-- Use the real user path only: the `./crapper` launcher with real arguments. The install-minimum recipe is the one exception: it runs `python -m crapper` from an environment that holds the declared lowest dependencies. Don't import `crapper` in Python, and don't treat `pytest` as proof.
+- Use the real user path only: the `./crapper` launcher with real arguments. The uml-launcher recipe drives a copy of `./uml` instead. The install-minimum recipe is the other exception: it runs `python -m crapper` from an environment that holds the declared lowest dependencies. Don't import `crapper` in Python, and don't treat `pytest` as proof.
 - Exit codes: `0` analysis finished, `2` the worst CRAP score is above `--threshold`, `1` a usage error. A git failure under `--changed` exits with git's status.
 
 ## Cleanup

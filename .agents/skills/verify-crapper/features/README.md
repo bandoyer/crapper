@@ -10,7 +10,7 @@ This folder is the maintained source for verifying what a crapper user sees. Rea
 
 ## Driving conventions
 
-- Run every crapper command through `$vc drive <project> <transcript> <args...>`, and every other project command through `$vc exec`. The one exception is [install-minimum](./install-minimum.md), which runs crapper from another environment through `exec`.
+- Run every crapper command through `$vc drive <project> <transcript> <args...>`, and every other project command through `$vc exec`. The exceptions are [install-minimum](./install-minimum.md), which runs crapper from another environment through `exec`, and [uml-launcher](./uml-launcher.md), which runs a copy of `./uml` through `exec`.
 - Leave an earlier run's report with `$vc stale`, never by editing files by hand, so the transcript's "reports before" section shows it.
 - Treat every command as literal. Keep quoted text unchanged.
 - A default run deletes and rewrites coverage reports, so a recipe that needs a report from an earlier run makes it right before the drive.
@@ -31,3 +31,4 @@ This folder is the maintained source for verifying what a crapper user sees. Rea
 - [Threshold](./threshold.md) covers `--threshold`: exit 2 when the worst score is above it, and a usage error when the threshold is not a finite number.
 - [A run with no source files](./empty-run.md) covers a full scan, a filter, or `--changed` that selects nothing: the snapshot becomes `{:entries []}`, and a failed run keeps it.
 - [Install with the lowest dependencies](./install-minimum.md) covers running crapper with every direct dependency at the lowest version `pyproject.toml` allows.
+- [The uml launcher](./uml-launcher.md) covers `./uml`: it runs with no zsh, reports a missing viewer, and hands the viewer the right example diagram and arguments.
