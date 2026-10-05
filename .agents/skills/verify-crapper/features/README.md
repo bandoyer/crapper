@@ -24,7 +24,7 @@ This folder is the maintained source for verifying what a crapper user sees. Rea
 
 ## Features
 
-- [Score with fresh coverage](./coverage-run.md) covers a default run: it measures coverage, reads only the reports this run wrote, and scores a language 0% when its collection wrote nothing.
+- [Score with fresh coverage](./coverage-run.md) covers a default run: it measures coverage, clears an earlier run's TypeScript, Python, Rust, and Clojure reports first, and scores those languages 0% when their collection wrote nothing.
 - [Score with existing coverage](./existing-coverage.md) covers `--use-existing-coverage`: it reads the reports already on disk, runs no coverage command, and deletes nothing.
 - [Complexity only](./no-coverage.md) covers `--no-coverage`: coverage and CRAP are `N/A`.
 - [Threshold](./threshold.md) covers `--threshold`: exit 2 when the worst score is above it.

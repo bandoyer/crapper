@@ -1,6 +1,6 @@
 # Score with fresh coverage
 
-A default `crapper` run measures coverage for each language it finds, reads the reports, and prints each function's coverage and CRAP score. A report this run did not write is not this run's coverage: when a language's collection writes nothing (its command fails, writes no report, or its tool is missing), that language scores 0%.
+A default `crapper` run measures coverage for each language it finds, reads the reports, and prints each function's coverage and CRAP score. For TypeScript, Python, Rust, and Clojure, the run first clears the reports crapper's collectors write (for TypeScript, also `coverage/**/lcov.info`), so when a collection writes nothing (its command fails, writes no report, or its tool is missing), that language scores 0%.
 
 ## Sub-features
 
@@ -25,6 +25,7 @@ Preconditions:
 
 ## Gotchas
 
+- Go and Java reports are not cleared up front. Go's root `coverage.out` and `target/coverage/coverage.out`, and a root or nested `target/site/jacoco/jacoco.xml`, are still read when this run did not write them. Don't map a stale-report proof onto Go or Java.
 - `--path /usr/bin:/bin` hides cargo, rustup, and cargo-llvm-cov on this machine (they live under mise). Without it, crapper finds or installs cargo-llvm-cov, and a real `cargo llvm-cov` run on the Rust fixture compiles for about a minute.
 - crapper installs missing coverage tools: `@vitest/coverage-v8` into `node_modules`, `coverage` and `pytest` into the project's Python, and `cargo-llvm-cov` with `cargo install`. The TypeScript fixtures avoid all of these: their `coverage` script is plain `sh`.
 - npm prints `> coverage` and `> sh coverage.sh` to stdout above the table.
