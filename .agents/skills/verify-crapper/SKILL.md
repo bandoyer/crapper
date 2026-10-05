@@ -36,6 +36,7 @@ project=$($vc project typescript)            # tick in src/clock.ts; `npm run co
 project=$($vc project typescript-failing)    # same package; `npm run coverage` exits 1 and writes nothing
 project=$($vc project rust)                  # tick in src/lib.rs, a Cargo package with one passing test in tests/
 project=$($vc project rust-split)            # tick and tock in src/lib.rs; a unit test calls tock, an integration test calls tick
+project=$($vc project rust-untested)         # tick and tock in src/lib.rs; an integration test calls tick, nothing calls tock
 project=$($vc project ~/Work/bujo)           # or a fresh git clone of a real project (committed files only)
 $vc stale "$project" coverage/lcov.info src/clock.ts     # leave an earlier run's report: every line covered, dated 2 days ago
 $vc drive "$project" <transcript> [crapper args...]
@@ -71,4 +72,4 @@ This removes only a scratch folder that `$vc project` created (`$TMPDIR/crapper-
 
 ## Helpers
 
-`bin/verify-crapper` subcommands: `doctor`, `project typescript | typescript-failing | rust | rust-split | <git repo>`, `stale <project> <report> <source>`, `drive [--path <PATH>] <project> <transcript> [crapper args...]`, `exec <project> <transcript> <command> [args...]`, `cleanup <project>`. Running it with no arguments prints usage.
+`bin/verify-crapper` subcommands: `doctor`, `project typescript | typescript-failing | rust | rust-split | rust-untested | <git repo>`, `stale <project> <report> <source>`, `drive [--path <PATH>] <project> <transcript> [crapper args...]`, `exec <project> <transcript> <command> [args...]`, `cleanup <project>`. Running it with no arguments prints usage.

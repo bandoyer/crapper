@@ -18,7 +18,7 @@ scratch_root() {
 usage() {
   cat <<USAGE
 usage: verify-crapper doctor
-       verify-crapper project typescript | typescript-failing | rust | rust-split | <git repo>
+       verify-crapper project typescript | typescript-failing | rust | rust-split | rust-untested | <git repo>
        verify-crapper stale <project> <report path> <source path>
        verify-crapper drive [--path <PATH>] <project> <transcript> [crapper args...]
        verify-crapper exec <project> <transcript> <command> [args...]
@@ -76,6 +76,17 @@ write_rust_split() {
   mkdir -p "$project/src" "$project/tests"
   printf '[package]\nname = "clock"\nversion = "0.1.0"\nedition = "2021"\n' >"$project/Cargo.toml"
   printf 'pub fn tick() -> i32 {\n    1\n}\n\npub fn tock() -> i32 {\n    2\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn tocks() {\n        assert_eq!(super::tock(), 2);\n    }\n}\n' >"$project/src/lib.rs"
+  printf '#[test]\nfn ticks() {\n    assert_eq!(clock::tick(), 1);\n}\n' >"$project/tests/clock.rs"
+  commit_fixture "$project"
+}
+
+# A Cargo package with `tick` and `tock` in src/lib.rs. An integration test
+# (tests/clock.rs) calls `tick`, and nothing calls `tock`.
+write_rust_untested() {
+  local project=$1
+  mkdir -p "$project/src" "$project/tests"
+  printf '[package]\nname = "clock"\nversion = "0.1.0"\nedition = "2021"\n' >"$project/Cargo.toml"
+  printf 'pub fn tick() -> i32 {\n    1\n}\n\npub fn tock() -> i32 {\n    2\n}\n' >"$project/src/lib.rs"
   printf '#[test]\nfn ticks() {\n    assert_eq!(clock::tick(), 1);\n}\n' >"$project/tests/clock.rs"
   commit_fixture "$project"
 }
@@ -154,6 +165,7 @@ case "${1:-}" in
       typescript-failing) write_typescript "$scratch/project" yes ;;
       rust) write_rust "$scratch/project" ;;
       rust-split) write_rust_split "$scratch/project" ;;
+      rust-untested) write_rust_untested "$scratch/project" ;;
       *) git clone -q -- "$2" "$scratch/project" ;;
     esac
     echo "$scratch/project"
