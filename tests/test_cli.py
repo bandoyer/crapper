@@ -446,7 +446,7 @@ def _fake_tools(command, cwd):
     elif command[1:4] == ["-m", "coverage", "run"]:
         Path(command[4].split("=", 1)[1]).touch()
     elif command[1:4] == ["-m", "coverage", "lcov"]:
-        hit = int(cwd.name == "one")
+        hit = int((cwd / "test_core.py").is_file())
         Path(command[-1]).write_text(f"SF:src/core.py\nDA:1,{hit}\nDA:2,{hit}\nend_of_record\n", encoding="utf-8")
     return 0
 
@@ -467,12 +467,25 @@ _RUST_LEFTOVER = {
             {
                 "one/pyproject.toml": "[project]\nname = 'one'\n",
                 "one/src/core.py": "def left():\n    return 1\n",
+                "one/test_core.py": "",
                 "two/pyproject.toml": "[project]\nname = 'two'\n",
                 "two/src/core.py": "def right():\n    return 2\n",
             },
             True,
             {"left": 100.0, "right": 0.0},
             id="python-two-pkgs",
+        ),
+        pytest.param(
+            {
+                "a/b/pyproject.toml": "[project]\nname = 'b'\n",
+                "a/b/src/core.py": "def left():\n    return 1\n",
+                "a__b/pyproject.toml": "[project]\nname = 'a__b'\n",
+                "a__b/src/core.py": "def right():\n    return 2\n",
+                "a__b/test_core.py": "",
+            },
+            True,
+            {"left": 0.0, "right": 100.0},
+            id="python-lookalike-folders",
         ),
         pytest.param(
             {

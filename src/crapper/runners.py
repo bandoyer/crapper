@@ -280,12 +280,10 @@ def _vitest_coverage_command(package: Path, files: list[Path], report_dir: Path)
 
 
 def _coverage_report(root: Path, module: Path, language: str) -> Path:
+    """`target/coverage/<language>/<module folder>/lcov.info`, one folder per module."""
+
     root = root.resolve()
-    module = module.resolve()
-    if module == root:
-        return root / "target" / "coverage" / language / "lcov.info"
-    slug = module.relative_to(root).as_posix().replace("/", "__")
-    return root / "target" / "coverage" / language / slug / "lcov.info"
+    return root / "target" / "coverage" / language / module.resolve().relative_to(root) / "lcov.info"
 
 
 def rust_modules(root: Path, files: list[Path]) -> list[Path]:
