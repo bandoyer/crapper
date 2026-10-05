@@ -18,7 +18,7 @@ scratch_root() {
 usage() {
   cat <<USAGE
 usage: verify-crapper doctor
-       verify-crapper project typescript | typescript-failing | rust | rust-split | rust-untested | rust-workspace | rust-siblings | rust-test-fns | rust-test-macros | languages | <git repo>
+       verify-crapper project typescript | typescript-failing | rust | rust-split | rust-untested | rust-workspace | rust-siblings | rust-test-fns | rust-test-macros | python-flat | python-mixed | languages | <git repo>
        verify-crapper stale <project> <report path> <source path>
        verify-crapper drive [--path <PATH>] <project> <transcript> [crapper args...]
        verify-crapper exec <project> <transcript> <command> [args...]
@@ -33,7 +33,7 @@ checkout() {
 
 commit_fixture() {
   local project=$1
-  printf 'target/\n.metrics/\ncoverage/\nnode_modules/\n' >"$project/.gitignore"
+  printf 'target/\n.metrics/\ncoverage/\nnode_modules/\n.venv/\n' >"$project/.gitignore"
   git -C "$project" init -q
   git -C "$project" add -A
   git -C "$project" -c user.name=verify -c user.email=verify@localhost commit -qm fixture
@@ -201,6 +201,27 @@ mod tests {
 }
 "
 
+# A Python project with demo.py at its root (verify-mutator's fixture shape): a
+# test at the root calls `tick`, nothing calls `tock`, and nothing imports
+# extra.py (`unused`). Its .venv sees python3's coverage and pytest.
+# python-mixed adds the package gears/, whose `spin` a root test calls.
+write_python() {
+  local project=$1 mixed=$2
+  mkdir -p "$project"
+  printf '[tool.pytest.ini_options]\ntestpaths = ["."]\n' >"$project/pyproject.toml"
+  printf 'def tick():\n    return 1\n\n\ndef tock():\n    return 2\n' >"$project/demo.py"
+  printf 'def unused():\n    return 3\n' >"$project/extra.py"
+  printf 'from demo import tick\n\n\ndef test_tick():\n    assert tick() == 1\n' >"$project/test_demo.py"
+  if [[ $mixed == yes ]]; then
+    mkdir -p "$project/gears"
+    : >"$project/gears/__init__.py"
+    printf 'def spin():\n    return 3\n' >"$project/gears/spin.py"
+    printf 'from gears.spin import spin\n\n\ndef test_spin():\n    assert spin() == 3\n' >"$project/test_gears.py"
+  fi
+  python3 -m venv --system-site-packages "$project/.venv"
+  commit_fixture "$project"
+}
+
 # languages: one function in each tree-sitter language (Python, Rust, Go,
 # TypeScript, Java), so a run parses each grammar crapper takes from the language pack.
 write_languages() {
@@ -311,6 +332,8 @@ case "${1:-}" in
         write_crate "$scratch/project" clock "$rust_lib_test_fns" tick $'\n[features]\nx = []\n'
         commit_fixture "$scratch/project" ;;
       rust-test-macros) write_cargo_package "$scratch/project" "$rust_lib_test_macros" ;;
+      python-flat) write_python "$scratch/project" no ;;
+      python-mixed) write_python "$scratch/project" yes ;;
       languages) write_languages "$scratch/project" ;;
       *) git clone -q -- "$2" "$scratch/project" ;;
     esac

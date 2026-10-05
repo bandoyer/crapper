@@ -348,7 +348,13 @@ def uses_pytest(package: Path) -> bool:
 
 
 def python_sources(package: Path, files: list[Path]) -> str:
-    """Directories coverage.py should report even when a file was never imported."""
+    """Directories coverage.py should report even when a file was never imported.
+
+    coverage.py reads a `--source` value as a directory, or else as an
+    importable module name, so a file directly in `package` adds `.`, never
+    its file name (#3). coverage.py also splits the list on commas, so a
+    folder with a comma in its name is reached through `.` too.
+    """
 
     tops: set[str] = set()
     package = package.resolve()
@@ -360,7 +366,8 @@ def python_sources(package: Path, files: list[Path]) -> str:
             relative = path.resolve().relative_to(package)
         except ValueError:
             continue
-        tops.add(relative.parts[0])
+        top = relative.parts[0]
+        tops.add(top if len(relative.parts) > 1 and "," not in top else ".")
     return ",".join(sorted(tops))
 
 
