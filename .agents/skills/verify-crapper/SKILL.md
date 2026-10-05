@@ -37,6 +37,7 @@ project=$($vc project typescript-failing)    # same package; `npm run coverage` 
 project=$($vc project rust)                  # tick in src/lib.rs, a Cargo package with one passing test in tests/
 project=$($vc project rust-split)            # tick and tock in src/lib.rs; a unit test calls tock, an integration test calls tick
 project=$($vc project rust-untested)         # tick and tock in src/lib.rs; an integration test calls tick, nothing calls tock
+project=$($vc project languages)             # one function in each of Python, Rust, Go, TypeScript, and Java; no coverage tooling
 project=$($vc project ~/Work/bujo)           # or a fresh git clone of a real project (committed files only)
 $vc stale "$project" coverage/lcov.info src/clock.ts     # leave an earlier run's report: every line covered, dated 2 days ago
 $vc drive "$project" <transcript> [crapper args...]
@@ -59,7 +60,7 @@ The features you can drive, and the end state that proves each one, are in [feat
 
 - Put transcripts where the caller asks, for example `<run folder>/artifacts/verify/round-1/criterion-1.txt`. Never put them inside the scratch project: cleanup removes it.
 - Proof is the transcript: the action (command), what the user saw (the table, stderr, exit code), and the side effects (reports before and after, the snapshot, tracked files). Check all three.
-- Use the real user path only: the `./crapper` launcher with real arguments. Don't import `crapper` in Python, and don't treat `pytest` as proof.
+- Use the real user path only: the `./crapper` launcher with real arguments. The install-minimum recipe is the one exception: it runs `python -m crapper` from an environment that holds the declared lowest dependencies. Don't import `crapper` in Python, and don't treat `pytest` as proof.
 - Exit codes: `0` analysis finished, `2` the worst CRAP score is above `--threshold`, `1` a usage error. A git failure under `--changed` exits with git's status.
 
 ## Cleanup
@@ -72,4 +73,4 @@ This removes only a scratch folder that `$vc project` created (`$TMPDIR/crapper-
 
 ## Helpers
 
-`bin/verify-crapper` subcommands: `doctor`, `project typescript | typescript-failing | rust | rust-split | rust-untested | <git repo>`, `stale <project> <report> <source>`, `drive [--path <PATH>] <project> <transcript> [crapper args...]`, `exec <project> <transcript> <command> [args...]`, `cleanup <project>`. Running it with no arguments prints usage.
+`bin/verify-crapper` subcommands: `doctor`, `project typescript | typescript-failing | rust | rust-split | rust-untested | languages | <git repo>`, `stale <project> <report> <source>`, `drive [--path <PATH>] <project> <transcript> [crapper args...]`, `exec <project> <transcript> <command> [args...]`, `cleanup <project>`. Running it with no arguments prints usage.

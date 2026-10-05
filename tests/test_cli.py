@@ -191,6 +191,7 @@ def test_selects_directories_filters_and_changed_files(tmp_path, monkeypatch, ca
     captured = capsys.readouterr()
     assert "not a git repository" in captured.err
     assert "No source files" not in captured.out
+    assert ':name "choose"' in (tmp_path / ".metrics" / "crap.edn").read_text(encoding="utf-8")
 
 
 def test_run_asks_for_coverage_when_it_is_enabled(tmp_path, monkeypatch):
@@ -590,15 +591,19 @@ def test_a_branch_taken_in_one_record_and_unreached_in_the_other_counts_once(tmp
     assert scores["pick"] == 100.0
 
 
+def _commit_all(root: Path) -> None:
+    git = ["git", "-C", str(root)]
+    subprocess.run([*git, "init"], check=True, capture_output=True)
+    subprocess.run([*git, "config", "user.email", "t@example.com"], check=True)
+    subprocess.run([*git, "config", "user.name", "t"], check=True)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-m", "init"], check=True, capture_output=True)
+
+
 def test_changed_files_from_a_real_git_status(tmp_path):
-    _git = ["git", "-C", str(tmp_path)]
-    subprocess.run([*_git, "init"], check=True, capture_output=True)
-    subprocess.run([*_git, "config", "user.email", "t@example.com"], check=True)
-    subprocess.run([*_git, "config", "user.name", "t"], check=True)
     keep = tmp_path / "keep.go"
     keep.write_text("package demo\nfunc Keep() int { return 1 }\n", encoding="utf-8")
-    subprocess.run([*_git, "add", "keep.go"], check=True)
-    subprocess.run([*_git, "commit", "-m", "init"], check=True, capture_output=True)
+    _commit_all(tmp_path)
     keep.unlink()
     cafe = tmp_path / "café.go"
     cafe.write_text("package demo\nfunc Cafe() int { return 1 }\n", encoding="utf-8")
@@ -634,6 +639,25 @@ def test_changed_outside_a_repository_returns_gits_status(tmp_path, capsys):
     captured = capsys.readouterr()
     assert "No source files" not in captured.out
     assert captured.err.strip()
+
+
+OLD_SNAPSHOT = '{:entries [\n  {:name "alpha", :namespace "app", :complexity 1, :coverage nil, :crap nil}\n]}\n'
+
+
+@pytest.mark.parametrize(
+    "args",
+    [[], ["no-such-path"], ["--changed"]],
+    ids=["full", "filter", "changed"],
+)
+def test_a_run_with_no_source_files_empties_the_snapshot(tmp_path, capsys, args):
+    _write(tmp_path, "src/app.py", "def alpha(xs):\n    return xs\n")
+    _commit_all(tmp_path)
+    if not args:
+        (tmp_path / "src/app.py").unlink()
+    _write(tmp_path, ".metrics/crap.edn", OLD_SNAPSHOT)
+    assert run(["--root", str(tmp_path), *args]) == 0
+    assert capsys.readouterr().out == "No source files to analyze.\n"
+    assert (tmp_path / ".metrics" / "crap.edn").read_text(encoding="utf-8") == "{:entries []}\n"
 
 
 def test_uml_loader_rejects_a_missing_viewer(tmp_path):
