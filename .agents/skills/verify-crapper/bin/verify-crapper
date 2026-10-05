@@ -56,12 +56,14 @@ write_typescript() {
   commit_fixture "$project"
 }
 
-# A Cargo package with one function, `tick`, on line 1 of src/lib.rs.
+# A Cargo package with one function, `tick`, on line 1 of src/lib.rs. Its test
+# lives in tests/, which crapper skips, so `tick` is the only scored function.
 write_rust() {
   local project=$1
-  mkdir -p "$project/src"
+  mkdir -p "$project/src" "$project/tests"
   printf '[package]\nname = "clock"\nversion = "0.1.0"\nedition = "2021"\n' >"$project/Cargo.toml"
-  printf 'pub fn tick() -> i32 { 1 }\n\n#[test]\nfn ticks() {\n    assert_eq!(tick(), 1);\n}\n' >"$project/src/lib.rs"
+  printf 'pub fn tick() -> i32 { 1 }\n' >"$project/src/lib.rs"
+  printf '#[test]\nfn ticks() {\n    assert_eq!(clock::tick(), 1);\n}\n' >"$project/tests/clock.rs"
   commit_fixture "$project"
 }
 

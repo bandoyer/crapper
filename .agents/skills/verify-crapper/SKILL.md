@@ -34,7 +34,7 @@ It changes no project file. It fails if the launcher is missing, `./crapper --he
 ```bash
 project=$($vc project typescript)            # tick in src/clock.ts; `npm run coverage` writes coverage/lcov.info with tick covered
 project=$($vc project typescript-failing)    # same package; `npm run coverage` exits 1 and writes nothing
-project=$($vc project rust)                  # tick in src/lib.rs, a Cargo package with one passing test
+project=$($vc project rust)                  # tick in src/lib.rs, a Cargo package with one passing test in tests/
 project=$($vc project ~/Work/bujo)           # or a fresh git clone of a real project (committed files only)
 $vc stale "$project" coverage/lcov.info src/clock.ts     # leave an earlier run's report: every line covered, dated 2 days ago
 $vc drive "$project" <transcript> [crapper args...]
