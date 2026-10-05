@@ -332,6 +332,90 @@ def test_a_failed_coverage_command_ignores_a_stale_report(tmp_path, monkeypatch)
     assert ":coverage 100.0" in text
 
 
+_TS_PROJECT = {
+    "package.json": '{"scripts": {"coverage": "vitest run --coverage"}}\n',
+    "src/clock.ts": "export function tick(): number { return 1 }\n",
+}
+_PY_PROJECT = {
+    "pyproject.toml": "[project]\nname = 'clock'\n",
+    "src/clock.py": "def tick():\n    return 1\n",
+}
+_RS_PROJECT = {
+    "Cargo.toml": "[package]\nname = 'clock'\n",
+    "src/lib.rs": "pub fn tick() -> i32 { 1 }\n",
+}
+
+
+def _use_real_coverage(monkeypatch, shell, which=lambda _name: None):
+    """Run the real collectors with commands and tool lookup faked at the process boundary."""
+
+    from crapper.runners import run_coverage
+
+    monkeypatch.setattr("crapper.cli.run_coverage", run_coverage)
+    monkeypatch.setattr("crapper.runners.run_shell", shell)
+    monkeypatch.setattr("crapper.runners.shutil.which", which)
+
+
+@pytest.mark.parametrize(
+    ("project", "stale", "source", "exit_code", "which"),
+    [
+        pytest.param(_TS_PROJECT, "coverage/lcov.info", "src/clock.ts", 1, None, id="ts-script-fails"),
+        pytest.param(_TS_PROJECT, "coverage/lcov.info", "src/clock.ts", 0, None, id="ts-script-writes-nothing"),
+        pytest.param(
+            {**_TS_PROJECT, "package.json": '{"scripts": {}}\n'},
+            "target/coverage/typescript/lcov.info",
+            "src/clock.ts",
+            0,
+            None,
+            id="ts-no-test-script",
+        ),
+        pytest.param(
+            _PY_PROJECT, "target/coverage/python/lcov.info", "src/clock.py", 1, None, id="python-coverage-missing"
+        ),
+        pytest.param(
+            _RS_PROJECT,
+            "target/coverage/rust/lcov.info",
+            "src/lib.rs",
+            1,
+            "cargo-llvm-cov",
+            id="rust-llvm-cov-fails",
+        ),
+        pytest.param(_RS_PROJECT, "target/coverage/rust/lcov.info", "src/lib.rs", 127, None, id="rust-no-tool"),
+    ],
+)
+def test_a_report_this_run_did_not_write_scores_zero(
+    tmp_path, monkeypatch, project, stale, source, exit_code, which
+):
+    for relative, text in project.items():
+        _write(tmp_path, relative, text)
+    _write(tmp_path, stale, f"SF:{source}\nDA:1,1\nLF:1\nLH:1\nend_of_record\n")
+    _use_real_coverage(
+        monkeypatch,
+        lambda _command, _cwd: exit_code,
+        lambda name: which if name == which else None,
+    )
+    assert run(["--root", str(tmp_path)]) == 0
+    text = (tmp_path / ".metrics" / "crap.edn").read_text(encoding="utf-8")
+    assert ':name "tick"' in text
+    assert ":coverage 0.0, :crap 2.0" in text
+
+
+def test_a_report_this_run_wrote_is_read(tmp_path, monkeypatch):
+    for relative, text in _TS_PROJECT.items():
+        _write(tmp_path, relative, text)
+    _write(tmp_path, "coverage/lcov.info", "SF:src/clock.ts\nDA:1,0\nLF:1\nLH:0\nend_of_record\n")
+
+    def coverage_script(command, cwd):
+        assert command == ["npm", "run", "coverage"]
+        _write(cwd, "coverage/lcov.info", "SF:src/clock.ts\nDA:1,1\nLF:1\nLH:1\nend_of_record\n")
+        return 0
+
+    _use_real_coverage(monkeypatch, coverage_script)
+    assert run(["--root", str(tmp_path)]) == 0
+    text = (tmp_path / ".metrics" / "crap.edn").read_text(encoding="utf-8")
+    assert ":coverage 100.0, :crap 1.0" in text
+
+
 def test_changed_files_from_a_real_git_status(tmp_path):
     _git = ["git", "-C", str(tmp_path)]
     subprocess.run([*_git, "init"], check=True, capture_output=True)
