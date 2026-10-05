@@ -37,6 +37,10 @@ project=$($vc project typescript-failing)    # same package; `npm run coverage` 
 project=$($vc project rust)                  # tick in src/lib.rs, a Cargo package with one passing test in tests/
 project=$($vc project rust-split)            # tick and tock in src/lib.rs; a unit test calls tock, an integration test calls tick
 project=$($vc project rust-untested)         # tick and tock in src/lib.rs; an integration test calls tick, nothing calls tock
+project=$($vc project rust-workspace)        # rust-untested's clock as a workspace root, with a member crate gears/ (spin tested, idle not)
+project=$($vc project rust-siblings)         # a virtual workspace with sibling members clock/ and gears/, the same two crates
+project=$($vc project rust-test-fns)         # tick and tock, plus #[test] and #[cfg(test)] code crapper skips, and non-test controls
+project=$($vc project rust-test-macros)      # #[tokio::test] and #[rstest] functions; doesn't compile, so drive with --no-coverage
 project=$($vc project languages)             # one function in each of Python, Rust, Go, TypeScript, and Java; no coverage tooling
 project=$($vc project ~/Work/bujo)           # or a fresh git clone of a real project (committed files only)
 $vc stale "$project" coverage/lcov.info src/clock.ts     # leave an earlier run's report: every line covered, dated 2 days ago
@@ -73,4 +77,4 @@ This removes only a scratch folder that `$vc project` created (`$TMPDIR/crapper-
 
 ## Helpers
 
-`bin/verify-crapper` subcommands: `doctor`, `project typescript | typescript-failing | rust | rust-split | rust-untested | languages | <git repo>`, `stale <project> <report> <source>`, `drive [--path <PATH>] <project> <transcript> [crapper args...]`, `exec <project> <transcript> <command> [args...]`, `cleanup <project>`. Running it with no arguments prints usage.
+`bin/verify-crapper` subcommands: `doctor`, `project typescript | typescript-failing | rust | rust-split | rust-untested | rust-workspace | rust-siblings | rust-test-fns | rust-test-macros | languages | <git repo>`, `stale <project> <report> <source>`, `drive [--path <PATH>] <project> <transcript> [crapper args...]`, `exec <project> <transcript> <command> [args...]`, `cleanup <project>`. Running it with no arguments prints usage.

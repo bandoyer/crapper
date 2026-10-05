@@ -18,7 +18,7 @@ scratch_root() {
 usage() {
   cat <<USAGE
 usage: verify-crapper doctor
-       verify-crapper project typescript | typescript-failing | rust | rust-split | rust-untested | languages | <git repo>
+       verify-crapper project typescript | typescript-failing | rust | rust-split | rust-untested | rust-workspace | rust-siblings | rust-test-fns | rust-test-macros | languages | <git repo>
        verify-crapper stale <project> <report path> <source path>
        verify-crapper drive [--path <PATH>] <project> <transcript> [crapper args...]
        verify-crapper exec <project> <transcript> <command> [args...]
@@ -56,14 +56,38 @@ write_typescript() {
   commit_fixture "$project"
 }
 
-# A Cargo package named clock with the given src/lib.rs. Its integration test
-# (tests/clock.rs, which crapper skips) calls `tick`.
+# A Cargo package in folder $1, named $2, with src/lib.rs $3. Its integration
+# test (tests/$2.rs, which crapper skips) calls `$2::$4`. $5, when given, is
+# appended to Cargo.toml (a [workspace] table, or [features]).
+write_crate() {
+  local dir=$1 name=$2 lib=$3 called=$4 extra=${5:-}
+  mkdir -p "$dir/src" "$dir/tests"
+  printf '[package]\nname = "%s"\nversion = "0.1.0"\nedition = "2021"\n%s' "$name" "$extra" >"$dir/Cargo.toml"
+  printf '%s' "$lib" >"$dir/src/lib.rs"
+  printf '#[test]\nfn calls() {\n    %s::%s();\n}\n' "$name" "$called" >"$dir/tests/$name.rs"
+}
+
+# A Cargo package named clock with the given src/lib.rs, whose integration test calls `tick`.
 write_cargo_package() {
-  local project=$1 lib=$2
-  mkdir -p "$project/src" "$project/tests"
-  printf '[package]\nname = "clock"\nversion = "0.1.0"\nedition = "2021"\n' >"$project/Cargo.toml"
-  printf '%s' "$lib" >"$project/src/lib.rs"
-  printf '#[test]\nfn ticks() {\n    assert_eq!(clock::tick(), 1);\n}\n' >"$project/tests/clock.rs"
+  write_crate "$1" clock "$2" tick
+  commit_fixture "$1"
+}
+
+# rust-workspace: a workspace whose root is the package clock (tick tested,
+#   tock not), with a member crate gears/ (spin tested, idle not). Both have
+#   src/lib.rs, and cargo-llvm-cov names both by absolute path.
+# rust-siblings: a virtual workspace with sibling members clock/ and gears/,
+#   the same two crates.
+write_workspace() {
+  local project=$1 kind=$2
+  if [[ $kind == root ]]; then
+    write_crate "$project" clock "$rust_lib_untested" tick $'\n[workspace]\nmembers = ["gears"]\n'
+  else
+    mkdir -p "$project"
+    printf '[workspace]\nmembers = ["clock", "gears"]\nresolver = "2"\n' >"$project/Cargo.toml"
+    write_crate "$project/clock" clock "$rust_lib_untested" tick
+  fi
+  write_crate "$project/gears" gears "$rust_lib_gears" spin
   commit_fixture "$project"
 }
 
@@ -72,6 +96,12 @@ write_cargo_package() {
 #   which crapper skips) calls `tock`, so `cargo llvm-cov --lib` and
 #   `cargo llvm-cov --test clock` each cover one of them.
 # rust-untested: `tick` and `tock`, and nothing calls `tock`.
+# rust-test-fns: `tick` and `tock`, test code crapper skips (top-level and
+#   stacked #[test], #[cfg(test)] on a function, a mod, and an impl, and
+#   #[cfg(all(test, feature = "x"))]), and non-test controls it scores.
+# rust-test-macros: test attributes from crates the fixture doesn't have
+#   (#[tokio::test], #[rstest]) and a #[testing::helper] control. It doesn't
+#   compile, so drive it with --no-coverage.
 rust_lib_rust='pub fn tick() -> i32 { 1 }
 '
 rust_lib_untested='pub fn tick() -> i32 {
@@ -82,6 +112,85 @@ pub fn tock() -> i32 {
     2
 }
 '
+rust_lib_gears='pub fn idle() -> i32 {
+    0
+}
+
+pub fn spin() -> i32 {
+    3
+}
+'
+rust_lib_test_fns="${rust_lib_untested}
+#[test]
+fn ticks() {
+    assert_eq!(tick(), 1);
+}
+
+#[should_panic]
+#[test]
+fn panics() {
+    if tick() == 1 {
+        panic!(\"one\");
+    }
+}
+
+#[cfg(test)]
+fn helper() -> i32 {
+    tick()
+}
+
+#[cfg(test)]
+mod checks {
+    fn probe() -> i32 {
+        super::tick()
+    }
+}
+
+pub struct Dial;
+
+#[cfg(test)]
+impl Dial {
+    fn turn(&self) -> i32 {
+        tick()
+    }
+}
+
+#[cfg(all(test, feature = \"x\"))]
+fn gated() -> i32 {
+    tick()
+}
+
+#[must_use]
+pub fn kept() -> i32 {
+    5
+}
+
+#[cfg(not(test))]
+pub fn real() -> i32 {
+    2
+}
+
+#[cfg(any(test, feature = \"x\"))]
+pub fn either() -> i32 {
+    3
+}
+"
+rust_lib_test_macros="${rust_lib_untested}
+#[tokio::test]
+async fn served() {
+    assert_eq!(tick(), 1);
+}
+
+#[rstest]
+fn cases() {
+    assert_eq!(tick(), 1);
+}
+
+#[testing::helper]
+pub fn assisted() -> i32 {
+    4
+}
+"
 rust_lib_split="${rust_lib_untested}
 #[cfg(test)]
 mod tests {
@@ -180,6 +289,12 @@ case "${1:-}" in
       rust) write_cargo_package "$scratch/project" "$rust_lib_rust" ;;
       rust-split) write_cargo_package "$scratch/project" "$rust_lib_split" ;;
       rust-untested) write_cargo_package "$scratch/project" "$rust_lib_untested" ;;
+      rust-workspace) write_workspace "$scratch/project" root ;;
+      rust-siblings) write_workspace "$scratch/project" virtual ;;
+      rust-test-fns)
+        write_crate "$scratch/project" clock "$rust_lib_test_fns" tick $'\n[features]\nx = []\n'
+        commit_fixture "$scratch/project" ;;
+      rust-test-macros) write_cargo_package "$scratch/project" "$rust_lib_test_macros" ;;
       languages) write_languages "$scratch/project" ;;
       *) git clone -q -- "$2" "$scratch/project" ;;
     esac
