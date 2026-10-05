@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from crapper.languages.rust import _file_modules, functions_in_source
 
 SOURCE = """
@@ -99,3 +101,56 @@ def test_nested_module_path(tmp_path):
     assert [(fn.namespace, fn.name, fn.complexity) for fn in functions] == [
         ("demo::game::board", "place", 2)
     ]
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        "#[test]\nfn hidden() {}",
+        "#[should_panic]\n#[test]\nfn hidden() {}",
+        "#[test]\n#[should_panic]\nfn hidden() {}",
+        "/// Checks the dial.\n#[test]\n// keep\nfn hidden() {}",
+        "#[tokio::test]\nasync fn hidden() {}",
+        "#[async_std::test]\nasync fn hidden() {}",
+        "#[rstest]\nfn hidden() {}",
+        "#[cfg(test)]\nfn hidden() {}",
+        "#[cfg(all(test, feature = \"x\"))]\nfn hidden() {}",
+        "#[cfg(all(unix, all(test, feature = \"x\")))]\nfn hidden() {}",
+        "#[cfg(test)]\nmod checks {\n    fn hidden() {}\n}",
+        "#[cfg(test)]\nimpl Dial {\n    fn hidden(&self) {}\n}",
+        "mod checks {\n    #![cfg(test)]\n    fn hidden() {}\n}",
+    ],
+)
+def test_rust_test_code_is_not_scored(item):
+    """#23: a test function, or one in test-only code, is not a scored function."""
+
+    source = f"pub fn kept() {{}}\n\n{item}\n"
+    assert [fn.name for fn in functions_in_source(source, "/tmp/lib.rs")] == ["kept"]
+
+
+@pytest.mark.parametrize(
+    "attribute",
+    [
+        "#[must_use]",
+        "#[inline]",
+        "#[cfg(not(test))]",
+        "#[cfg(any(test, feature = \"x\"))]",
+        "#[cfg(feature = \"x\")]",
+        "#[cfg(all(unix, feature = \"x\"))]",
+        "#[testing::helper]",
+        "#[attest]",
+        "#[test_helper]",
+    ],
+)
+def test_rust_functions_with_other_attributes_are_scored(attribute):
+    source = f"{attribute}\npub fn kept() {{}}\n"
+    assert [fn.name for fn in functions_in_source(source, "/tmp/lib.rs")] == ["kept"]
+
+
+def test_a_rust_file_marked_test_only_scores_nothing():
+    assert functions_in_source("#![cfg(test)]\n\npub fn helper() {}\n", "/tmp/lib.rs") == []
+
+
+def test_other_inner_attributes_keep_a_rust_function_scored():
+    source = "#![allow(dead_code)]\n\nmod gears {\n    #![allow(unused)]\n    pub fn kept() {}\n}\n"
+    assert [fn.name for fn in functions_in_source(source, "/tmp/lib.rs")] == ["kept"]

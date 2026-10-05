@@ -39,7 +39,7 @@ def analyze_files(
 ) -> list[Entry]:
     root = project_root.resolve()
     if bundle is not None:
-        bundle.bind_sources([_source_path(file.resolve(), root) for file in files])
+        bundle.bind_sources([_source_path(file.resolve(), root) for file in files], root)
     entries: list[Entry] = []
     for file in files:
         file = file.resolve()

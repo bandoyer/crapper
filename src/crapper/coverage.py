@@ -157,18 +157,21 @@ def _reverse_key(
 
 
 def _select_key(
-    keys: list[str], source_path: str, source_parts: list[tuple[str, ...]]
+    keys: list[str],
+    source_path: str,
+    source_parts: list[tuple[str, ...]],
+    root: Path | None,
 ) -> str | None:
-    """Report key for one source file.
+    """Report key for one source file, whose path is relative to `root`.
 
-    An exact path wins. A report path may be the source path plus a prefix
+    An exact path wins, relative or absolute under `root`. A report path may be the source path plus a prefix
     (`proj/src/a.go` for `src/a.go`). It is not a match when another source
     file is a longer suffix of that key, so `b/main.go` does not take
     `a/b/main.go`.
     """
 
     items = _key_items(keys)
-    candidates = _candidates(source_path)
+    candidates = _candidates(source_path, root)
     exact = _exact_key(items, candidates)
     if exact is not None:
         return exact
@@ -205,9 +208,14 @@ def _another_source_ends_with(
     return False
 
 
-def _candidates(source_path: str) -> list[str]:
+def _candidates(source_path: str, root: Path | None) -> list[str]:
+    """Paths a report may use for the source: as given, absolute under `root`, and without `src/`.
+
+    With no root there is no absolute candidate: the current folder is never one.
+    """
+
     relative = normalize_path(source_path)
-    absolute = normalize_path(str(Path(source_path).resolve())) if source_path else relative
+    absolute = normalize_path((root / source_path).resolve().as_posix()) if source_path and root else ""
     no_src = re.sub(r"^src/", "", relative)
     absolute_no_src = re.sub(r"/src/", "/", absolute)
     values = [relative, absolute, no_src, absolute_no_src]
@@ -327,10 +335,10 @@ def parse_go_profile(text: str) -> dict[str, list[tuple[int, int, int, int]]]:
     return out
 
 
-def _profile_segments(profile, path: str, source_parts: list[tuple[str, ...]] | None = None):
+def _profile_segments(profile, path: str, source_parts: list[tuple[str, ...]] | None, root: Path | None):
     if profile is None:
         return None
-    key = _select_key(list(profile), path, source_parts or [])
+    key = _select_key(list(profile), path, source_parts or [], root)
     if key is None:
         return None
     return profile[key]
@@ -342,8 +350,9 @@ def go_percent(
     start: int,
     end: int,
     source_parts: list[tuple[str, ...]] | None = None,
+    root: Path | None = None,
 ) -> float | None:
-    segments = _profile_segments(profile, path, source_parts)
+    segments = _profile_segments(profile, path, source_parts, root)
     if segments is None:
         return None
     total = 0
@@ -434,14 +443,16 @@ class CoverageBundle:
     jacoco: dict[str, list[JacocoMethod]] | None = None
     form_html: dict[str, dict[int, tuple[int, int]]] = field(default_factory=dict)
     source_parts: list[tuple[str, ...]] = field(default_factory=list)
+    root: Path | None = None
 
-    def bind_sources(self, paths: list[str]) -> None:
-        """Remember project files so a short path cannot take a longer file's report."""
+    def bind_sources(self, paths: list[str], root: Path | None = None) -> None:
+        """Remember project files, relative to `root`, so a short path cannot take a longer file's report."""
 
+        self.root = root
         found: list[tuple[str, ...]] = []
         seen: set[tuple[str, ...]] = set()
         for source in paths:
-            for candidate in _candidates(source):
+            for candidate in _candidates(source, root):
                 parts = tuple(_segments(candidate))
                 if parts and parts not in seen:
                     seen.add(parts)
@@ -465,6 +476,7 @@ class CoverageBundle:
                 function.start_line,
                 function.end_line,
                 self.source_parts,
+                self.root,
             )
         html = self._html_lines(function.path)
         if html is not None:
@@ -478,16 +490,21 @@ class CoverageBundle:
         return percent_for_range(record, function.start_line, function.end_line)
 
     def _html_lines(self, path: str) -> dict[int, tuple[int, int]] | None:
-        return _lookup(self.form_html, path, self.source_parts)
+        return _lookup(self.form_html, path, self.source_parts, self.root)
 
     def _lcov_lines(self, path: str) -> dict[int, tuple[int, int]] | None:
-        return _lookup(self.lcov, path, self.source_parts)
+        return _lookup(self.lcov, path, self.source_parts, self.root)
 
 
-def _lookup(index: dict[str, dict], source_path: str, source_parts: list[tuple[str, ...]]):
+def _lookup(
+    index: dict[str, dict],
+    source_path: str,
+    source_parts: list[tuple[str, ...]],
+    root: Path | None,
+):
     if not index:
         return None
-    key = _select_key(list(index), source_path, source_parts)
+    key = _select_key(list(index), source_path, source_parts, root)
     if key is None:
         return None
     return index[key]

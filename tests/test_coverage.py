@@ -1,3 +1,6 @@
+import pytest
+
+from crapper.analyze import analyze_files
 from crapper.coverage import (
     CoverageBundle,
     Report,
@@ -211,3 +214,58 @@ def test_a_listed_report_resolves_a_relative_source_against_its_module(tmp_path)
     assert sorted(bundle.lcov) == sorted(
         [(tmp_path / "one" / "src" / "core.py").resolve().as_posix(), "/elsewhere/x.py"]
     )
+
+
+# Two crates with the same src/lib.rs layout. The first function is on lines
+# 1-3 and the second on lines 5-7; the LCOV hits say which one a test called.
+TWO_FUNCTIONS = "pub fn {0}() -> i32 {{\n    1\n}}\n\npub fn {1}() -> i32 {{\n    2\n}}\n"
+
+
+def _crate(folder, first, second, hit_first):
+    source = folder / "src" / "lib.rs"
+    source.parent.mkdir(parents=True)
+    source.write_text(TWO_FUNCTIONS.format(first, second), encoding="utf-8")
+    hits = [(line, int((line < 4) == hit_first)) for line in (1, 2, 3, 5, 6, 7)]
+    record = "".join(f"DA:{line},{hit}\n" for line, hit in hits)
+    return source, f"SF:{source.resolve().as_posix()}\n{record}end_of_record\n"
+
+
+@pytest.mark.parametrize("layout", ["run-from-a-member-crate", "report-names-a-sibling-crate"])
+def test_a_source_is_matched_to_its_report_under_the_root_not_the_current_folder(
+    tmp_path, monkeypatch, layout
+):
+    """#31: cargo-llvm-cov's absolute SF: keys match a source by its path under --root.
+
+    run-from-a-member-crate: the workspace root is the package clock, and the
+    user stands in its member crate gears/, whose src/lib.rs would be gears'
+    own key if resolved against the current folder.
+    report-names-a-sibling-crate: `cargo llvm-cov --workspace` in clock/ also
+    names its sibling gears/src/lib.rs at the same depth; only clock is scored.
+    """
+
+    workspace = tmp_path / "ws"
+    if layout == "run-from-a-member-crate":
+        root, gears, here = workspace, workspace / "gears", workspace / "gears"
+    else:
+        root, gears, here = workspace / "clock", workspace / "gears", workspace
+    clock_source, clock_record = _crate(root, "tick", "tock", hit_first=True)
+    gears_source, gears_record = _crate(gears, "idle", "spin", hit_first=False)
+    report = root / "target" / "coverage" / "rust" / "lcov.info"
+    report.parent.mkdir(parents=True)
+    report.write_text(clock_record + gears_record, encoding="utf-8")
+    scored = [clock_source, gears_source] if gears.is_relative_to(root) else [clock_source]
+    monkeypatch.chdir(here)
+
+    entries = analyze_files(scored, root, load_bundle(root, [Report(report, root)]))
+
+    want = {"tick": 100.0, "tock": 0.0}
+    if len(scored) == 2:
+        want |= {"idle": 0.0, "spin": 100.0}
+    assert {entry.name: entry.coverage for entry in entries} == want
+
+
+def test_without_a_root_a_source_has_no_absolute_candidate():
+    """A bundle that was never bound to a root doesn't guess one: `pkg/src/lib.rs` doesn't take `pkg/lib.rs`."""
+
+    bundle = CoverageBundle(lcov={"pkg/lib.rs": {1: (1, 1)}})
+    assert bundle.percent_for(function(path="pkg/src/lib.rs", start_line=1, end_line=1)) is None

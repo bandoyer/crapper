@@ -3,8 +3,13 @@
 Decision points are `if` / `if let`, `for`, `while` / `while let`, `loop`,
 each `match` arm, `?`, and `&&` / `||`. Free functions are namespaced by the
 module path (`crate::foo::bar`). Methods are namespaced by the self type
-(`crate::foo::Widget`) so uml-viewer can join them to that type. Bodies inside
-`mod tests` are test code and are not scored.
+(`crate::foo::Widget`) so uml-viewer can join them to that type.
+
+Test code is not scored: bodies inside `mod tests`, and a function that has a
+test attribute or sits in a `mod` or `impl` that has one. A test attribute is
+one whose path ends in `test` (`#[test]`, `#[tokio::test]`), `#[rstest]`, or a
+`cfg` that holds only in a test build (`test`, or `all(...)` with such a part).
+An inner `#![cfg(test)]` marks the file or `mod` body it starts.
 """
 
 import re
@@ -31,6 +36,9 @@ _DECISIONS = {
     "match_arm",
     "try_expression",
 }
+_TEST_ATTRIBUTES = {"test", "rstest"}
+_BEFORE_ITEM = {"attribute_item", "line_comment", "block_comment"}
+_BODIES = {"source_file", "declaration_list"}
 _PACKAGE_BLOCK = re.compile(r"(?ms)^\[package\](.*?)(?:^\[|\Z)")
 _NAME = re.compile(r'(?m)^name\s*=\s*"([^"]+)"')
 
@@ -62,6 +70,65 @@ def _ancestor_mods(data: bytes, node) -> list[str]:
 
 def _in_mod_named(data: bytes, node, name: str) -> bool:
     return name in _ancestor_mods(data, node)
+
+
+def _predicates(data: bytes, predicates):
+    """Each predicate in a `cfg` list, `(...)`, as its name and its own list, or None."""
+
+    items = predicates.children
+    for item, following in zip(items, [*items[1:], None]):
+        if item.type == "identifier":
+            nested = following if following is not None and following.type == "token_tree" else None
+            yield node_text(data, item), nested
+
+
+def _test_only(data: bytes, predicates) -> bool:
+    """A `cfg` predicate list that holds only in a test build: `test`, or `all(...)` with such a part."""
+
+    for name, nested in _predicates(data, predicates):
+        if name == "test" and nested is None:
+            return True
+        if name == "all" and nested is not None and _test_only(data, nested):
+            return True
+    return False
+
+
+def _is_test_attribute(data: bytes, attribute) -> bool:
+    path = "".join(node_text(data, attribute.children[0]).split())
+    if path == "cfg":
+        predicates = child_of_type(attribute, "token_tree")
+        return predicates is not None and _test_only(data, predicates)
+    return path.split("::")[-1] in _TEST_ATTRIBUTES
+
+
+def _attribute_items(node):
+    """A node's attribute items: inner `#![...]` ones when it is a file or a `mod`
+    body, and outer ones written before it, with any comments between them."""
+
+    if node.type in _BODIES:
+        yield from (child for child in node.children if child.type == "inner_attribute_item")
+    current = node.prev_sibling
+    while current is not None and current.type in _BEFORE_ITEM:
+        yield current
+        current = current.prev_sibling
+
+
+def _attributes(node):
+    for item in _attribute_items(node):
+        attribute = child_of_type(item, "attribute")
+        if attribute is not None:
+            yield attribute
+
+
+def _in_test_code(data: bytes, node) -> bool:
+    """The function, or a `mod`, `impl`, or file around it, has a test attribute."""
+
+    current = node
+    while current is not None:
+        if any(_is_test_attribute(data, attribute) for attribute in _attributes(current)):
+            return True
+        current = current.parent
+    return False
 
 
 def _first_type_name(data: bytes, node) -> str | None:
@@ -159,7 +226,7 @@ def _record_function(data: bytes, node, modules: list[str], path: str) -> Functi
         return None
     if node.parent is not None and node.parent.type == "block":
         return None
-    if _in_mod_named(data, node, "tests"):
+    if _in_mod_named(data, node, "tests") or _in_test_code(data, node):
         return None
     ident = child_of_type(node, "identifier")
     if ident is None:

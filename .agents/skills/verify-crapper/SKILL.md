@@ -37,6 +37,10 @@ project=$($vc project typescript-failing)    # same package; `npm run coverage` 
 project=$($vc project rust)                  # tick in src/lib.rs, a Cargo package with one passing test in tests/
 project=$($vc project rust-split)            # tick and tock in src/lib.rs; a unit test calls tock, an integration test calls tick
 project=$($vc project rust-untested)         # tick and tock in src/lib.rs; an integration test calls tick, nothing calls tock
+project=$($vc project rust-workspace)        # rust-untested's clock as a workspace root, with a member crate gears/ (spin tested, idle not)
+project=$($vc project rust-siblings)         # a virtual workspace with sibling members clock/ and gears/, the same two crates
+project=$($vc project rust-test-fns)         # tick and tock, plus #[test] and #[cfg(test)] code crapper skips, and non-test controls
+project=$($vc project rust-test-macros)      # #[tokio::test] and #[rstest] functions; doesn't compile, so drive with --no-coverage
 project=$($vc project languages)             # one function in each of Python, Rust, Go, TypeScript, and Java; no coverage tooling
 project=$($vc project ~/Work/bujo)           # or a fresh git clone of a real project (committed files only)
 $vc stale "$project" coverage/lcov.info src/clock.ts     # leave an earlier run's report: every line covered, dated 2 days ago
@@ -48,10 +52,10 @@ $vc exec "$project" <transcript> <command> [args...]
 `drive` runs this checkout's `./crapper <args...>` with the project as the working directory, exactly as a user would type it there. `exec` runs any other command the same way. Both append one block to `<transcript>` and also print it:
 
 - the command, any `PATH` override, the date and time, the crapper commit, and the exit code
-- the coverage reports on disk before the run (`lcov.info`, `coverage.out`, `jacoco.xml`, with modification times)
+- the coverage reports on disk before the run (`lcov.info`, `coverage.out`, `jacoco.xml`, with modification times), listed from the project's top folder even when `<project>` is a folder inside it
 - stdout and stderr
 - the coverage reports on disk after the run
-- `.metrics/crap.edn`
+- `.metrics/crap.edn`, and any other `.metrics/crap.edn` in the project, headed by its path (a run with `--root` writes it there)
 - tracked files changed in the project (`(none)` when crapper left the source alone)
 
 The features you can drive, and the end state that proves each one, are in [features/README.md](features/README.md).
@@ -73,4 +77,4 @@ This removes only a scratch folder that `$vc project` created (`$TMPDIR/crapper-
 
 ## Helpers
 
-`bin/verify-crapper` subcommands: `doctor`, `project typescript | typescript-failing | rust | rust-split | rust-untested | languages | <git repo>`, `stale <project> <report> <source>`, `drive [--path <PATH>] <project> <transcript> [crapper args...]`, `exec <project> <transcript> <command> [args...]`, `cleanup <project>`. Running it with no arguments prints usage.
+`bin/verify-crapper` subcommands: `doctor`, `project typescript | typescript-failing | rust | rust-split | rust-untested | rust-workspace | rust-siblings | rust-test-fns | rust-test-macros | languages | <git repo>`, `stale <project> <report> <source>`, `drive [--path <PATH>] <project> <transcript> [crapper args...]`, `exec <project> <transcript> <command> [args...]`, `cleanup <project>`. Running it with no arguments prints usage.
