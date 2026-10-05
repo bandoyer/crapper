@@ -1,5 +1,6 @@
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -547,13 +548,94 @@ def test_a_default_run_reads_only_the_reports_its_collectors_wrote(tmp_path, mon
     )
     monkeypatch.chdir(tmp_path)
     assert run(["--root", str(tmp_path)]) == 0
-    text = (tmp_path / ".metrics" / "crap.edn").read_text(encoding="utf-8")
-    import re
-
-    scores = {name: float(value) for name, value in re.findall(r':name "(\w+)".*?:coverage ([\d.]+)', text)}
-    assert scores == want
+    assert _snapshot_scores(tmp_path) == want
     for relative in project:
         assert (tmp_path / relative).is_file(), f"{relative} was deleted"
+
+
+def _snapshot_scores(root: Path) -> dict[str, float]:
+    text = (root / ".metrics" / "crap.edn").read_text(encoding="utf-8")
+    return {name: float(value) for name, value in re.findall(r':name "(\w+)".*?:coverage ([\d.]+)', text)}
+
+
+_PY_CLOCK = "def tick():\n    return 1\n\n\ndef tock():\n    return 2\n"
+_PY_TEST_TICK = "\n\ndef test_tick():\n    assert tick() == 1\n"
+_PY_ROOT_TESTS = "[tool.pytest.ini_options]\ntestpaths = ['.']\n"
+
+
+@pytest.mark.parametrize(
+    ("project", "want"),
+    [
+        pytest.param(
+            {
+                "pyproject.toml": _PY_ROOT_TESTS,
+                "demo.py": _PY_CLOCK,
+                "extra.py": "def unused():\n    return 3\n",
+                "test_demo.py": "from demo import tick" + _PY_TEST_TICK,
+            },
+            {"tick": 100.0, "tock": 50.0, "unused": 0.0},
+            id="flat",
+        ),
+        pytest.param(
+            {
+                "pyproject.toml": _PY_ROOT_TESTS,
+                "demo.py": _PY_CLOCK,
+                "gears/__init__.py": "",
+                "gears/spin.py": "def spin():\n    return 3\n",
+                "test_both.py": "from demo import tick\nfrom gears.spin import spin"
+                + _PY_TEST_TICK
+                + "\n\ndef test_spin():\n    assert spin() == 3\n",
+            },
+            {"tick": 100.0, "tock": 50.0, "spin": 100.0},
+            id="mixed",
+        ),
+        pytest.param(
+            {
+                "pyproject.toml": _PY_ROOT_TESTS,
+                "make-report.py": _PY_CLOCK,
+                "test_report.py": "import importlib.util\n\n"
+                'spec = importlib.util.spec_from_file_location("make_report", "make-report.py")\n'
+                "report = importlib.util.module_from_spec(spec)\n"
+                "spec.loader.exec_module(report)\n"
+                "tick = report.tick" + _PY_TEST_TICK,
+            },
+            {"tick": 100.0, "tock": 50.0},
+            id="script",
+        ),
+        pytest.param(
+            {
+                "pyproject.toml": "[tool.pytest.ini_options]\npythonpath = ['src']\n",
+                "src/demo.py": _PY_CLOCK,
+                "tests/test_demo.py": "from demo import tick" + _PY_TEST_TICK,
+            },
+            {"tick": 100.0, "tock": 50.0},
+            id="src",
+        ),
+        pytest.param(
+            {
+                "pyproject.toml": "[tool.pytest.ini_options]\npythonpath = ['.']\n",
+                "clock/__init__.py": "",
+                "clock/hands.py": _PY_CLOCK,
+                "tests/test_clock.py": "from clock.hands import tick" + _PY_TEST_TICK,
+            },
+            {"tick": 100.0, "tock": 50.0},
+            id="package",
+        ),
+    ],
+)
+def test_a_default_run_measures_python_in_each_layout(tmp_path, monkeypatch, project, want):
+    """Real coverage.py decides what --source means: a file at the root is measured (#3)."""
+
+    from crapper import runners
+
+    for relative, text in project.items():
+        _write(tmp_path, relative, text)
+    _write(tmp_path, ".venv/bin/python", f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+    (tmp_path / ".venv" / "bin" / "python").chmod(0o755)
+    _use_real_coverage(monkeypatch, runners.run_shell, shutil.which)
+    monkeypatch.chdir(tmp_path)
+    assert run(["--root", str(tmp_path)]) == 0
+    assert _snapshot_scores(tmp_path) == want
 
 
 _SPLIT_LIB = (
@@ -583,10 +665,7 @@ def _scores_from_split_runs(root: Path, placement: str, unit: str, integration: 
         _write(root, "target/coverage/rust/unit/lcov.info", unit)
         _write(root, "target/coverage/rust/integration/lcov.info", integration)
     assert run(["--root", str(root), "--use-existing-coverage"]) == 0
-    text = (root / ".metrics" / "crap.edn").read_text(encoding="utf-8")
-    import re
-
-    return {name: float(value) for name, value in re.findall(r':name "(\w+)".*?:coverage ([\d.]+)', text)}
+    return _snapshot_scores(root)
 
 
 @pytest.mark.parametrize("placement", ["one-report", "two-reports"])

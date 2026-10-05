@@ -67,7 +67,7 @@ TypeScript, TSX, and JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`) use the same str
 
 Rust counts `if`, loops, each `match` arm, `?`, and `&&` / `||`. Test code is skipped: `mod tests`, a function with a test attribute (`#[test]`, `#[tokio::test]` and other paths ending in `test`, `#[rstest]`), and anything under `#[cfg(test)]`, including a `mod`, an `impl`, a file that starts `#![cfg(test)]`, and a `cfg(all(...))` that includes `test`. Coverage is LCOV from `cargo llvm-cov` or `cargo tarpaulin`, run in the nearest directory that contains `Cargo.toml`. When neither tool is installed, the run installs `cargo-llvm-cov`.
 
-Python counts `if`, `elif`, `for`, `while`, `except`, each `match` case, a comprehension filter, a conditional expression, and each `and` / `or`. Nested functions stay inside the enclosing function. Coverage is LCOV from `coverage.py`, running pytest when the project uses it and `unittest` otherwise. `coverage` and `pytest` are installed into the project's interpreter when they are missing.
+Python counts `if`, `elif`, `for`, `while`, `except`, each `match` case, a comprehension filter, a conditional expression, and each `and` / `or`. Nested functions stay inside the enclosing function. Coverage is LCOV from `coverage.py`, running pytest when the project uses it and `unittest` otherwise. It measures each top-level folder that holds a source file, and the project folder itself (`--source=.`) when a source file sits there, so a flat project's test files show up in `lcov.info` too. `coverage` and `pytest` are installed into the project's interpreter when they are missing.
 
 ## Coverage commands
 
