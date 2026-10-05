@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# Check and drive this checkout's crapper against a scratch project. Run from anywhere.
+set -euo pipefail
+
+repo=$(cd "$(dirname "$0")/../../../.." && pwd)
+crapper="$repo/crapper"
+scratch_prefix="$(realpath -m -- "${TMPDIR:-/tmp}")/crapper-verify."
+
+# Prints the scratch folder that holds path $1 after resolving `..` and symlinks, or fails.
+scratch_root() {
+  local path rest
+  path=$(realpath -m -- "$1")
+  rest=${path#"$scratch_prefix"}
+  [[ $rest != "$path" && -n $rest ]] || return 1
+  echo "$scratch_prefix${rest%%/*}"
+}
+
+usage() {
+  cat <<USAGE
+usage: verify-crapper doctor
+       verify-crapper project typescript | typescript-failing | rust | <git repo>
+       verify-crapper stale <project> <report path> <source path>
+       verify-crapper drive [--path <PATH>] <project> <transcript> [crapper args...]
+       verify-crapper exec <project> <transcript> <command> [args...]
+       verify-crapper cleanup <project>
+USAGE
+  exit 2
+}
+
+checkout() {
+  echo "$(git -C "$repo" rev-parse --short HEAD) on $(git -C "$repo" branch --show-current)$([[ -z "$(git -C "$repo" status --porcelain -- src crapper pyproject.toml)" ]] || echo ' + uncommitted changes')"
+}
+
+commit_fixture() {
+  local project=$1
+  printf 'target/\n.metrics/\ncoverage/\nnode_modules/\n' >"$project/.gitignore"
+  git -C "$project" init -q
+  git -C "$project" add -A
+  git -C "$project" -c user.name=verify -c user.email=verify@localhost commit -qm fixture
+}
+
+# A TypeScript package with one function, `tick`, on line 1 of src/clock.ts.
+# Its `coverage` script is `sh coverage.sh`, which needs no npm install.
+# typescript: coverage.sh writes coverage/lcov.info with line 1 hit (100%).
+# typescript-failing: coverage.sh exits 1 and writes nothing.
+write_typescript() {
+  local project=$1 failing=$2
+  mkdir -p "$project/src"
+  printf '{"name":"clock","private":true,"scripts":{"coverage":"sh coverage.sh"}}\n' >"$project/package.json"
+  printf 'export function tick(): number { return 1 }\n' >"$project/src/clock.ts"
+  if [[ $failing == yes ]]; then
+    printf 'echo "coverage.sh: tests failed" >&2\nexit 1\n' >"$project/coverage.sh"
+  else
+    printf 'mkdir -p coverage\nprintf "SF:src/clock.ts\\nDA:1,1\\nLF:1\\nLH:1\\nend_of_record\\n" > coverage/lcov.info\n' >"$project/coverage.sh"
+  fi
+  commit_fixture "$project"
+}
+
+# A Cargo package with one function, `tick`, on line 1 of src/lib.rs.
+write_rust() {
+  local project=$1
+  mkdir -p "$project/src"
+  printf '[package]\nname = "clock"\nversion = "0.1.0"\nedition = "2021"\n' >"$project/Cargo.toml"
+  printf 'pub fn tick() -> i32 { 1 }\n\n#[test]\nfn ticks() {\n    assert_eq!(tick(), 1);\n}\n' >"$project/src/lib.rs"
+  commit_fixture "$project"
+}
+
+# Lists the coverage reports crapper can read, with their modification times.
+reports() {
+  local project=$1
+  (cd "$project" && find . \( -path ./node_modules -o -path ./.git \) -prune -o -type f \
+    \( -name lcov.info -o -name coverage.out -o -name jacoco.xml \) -printf '%p  %TF %TT\n' | sort)
+}
+
+# Runs "$@" in the project and appends the action, what the user saw, and the state left behind.
+record() {
+  local project=$1 transcript=$2 shown=$3 path=$4
+  shift 4
+  mkdir -p "$(dirname "$transcript")"
+  local out err code before
+  out=$(mktemp) err=$(mktemp)
+  before=$(reports "$project")
+  set +e
+  (cd "$project" && PATH="$path" "$@") >"$out" 2>"$err"
+  code=$?
+  set -e
+  {
+    echo "\$ (cd $project) $shown"
+    [[ $path == "$PATH" ]] || echo "PATH: $path"
+    echo "date: $(date '+%F %T %Z')"
+    echo "crapper: $(checkout)"
+    echo "exit code: $code"
+    echo "--- coverage reports before"; grep . <<<"$before" || echo "(none)"
+    echo "--- stdout"; cat "$out"
+    echo "--- stderr"; cat "$err"
+    echo "--- coverage reports after"; reports "$project" | grep . || echo "(none)"
+    echo "--- .metrics/crap.edn"; cat "$project/.metrics/crap.edn" 2>/dev/null || echo "(none)"
+    echo "--- tracked files changed (git status --short)"
+    git -C "$project" status --short --untracked-files=no | grep . || echo "(none)"
+    echo
+  } | tee -a "$transcript"
+  rm -f "$out" "$err"
+}
+
+# Prints each argument shell-quoted with a leading space, or nothing when there are none.
+quoted() {
+  [[ $# -eq 0 ]] || printf ' %q' "$@"
+}
+
+require_scratch() {
+  scratch_root "$2" >/dev/null || { echo "$1: refusing $2; it is not inside a verify-crapper scratch folder"; exit 1; }
+}
+
+case "${1:-}" in
+  doctor)
+    [[ -x "$crapper" ]] || { echo "doctor: no launcher at $crapper"; exit 1; }
+    "$crapper" --help >/dev/null 2>&1 || { echo "doctor: $crapper --help failed; run it once to build .venv"; exit 1; }
+    imported=$("$repo/.venv/bin/python" -c 'import crapper; print(crapper.__file__)')
+    [[ $imported == "$repo/src/crapper/__init__.py" ]] || { echo "doctor: .venv imports $imported, not this checkout's src"; exit 1; }
+    echo "doctor: ok"
+    echo "crapper:  $crapper ($("$repo/.venv/bin/python" --version))"
+    echo "imports:  $imported"
+    echo "checkout: $(checkout)"
+    echo "tools:    npm $(command -v npm >/dev/null && npm --version || echo missing), cargo-llvm-cov $(command -v cargo-llvm-cov >/dev/null && echo found || echo missing)"
+    ;;
+  project)
+    [[ $# -eq 2 ]] || usage
+    scratch=$(mktemp -d "${scratch_prefix}XXXXXX")
+    case $2 in
+      typescript) write_typescript "$scratch/project" no ;;
+      typescript-failing) write_typescript "$scratch/project" yes ;;
+      rust) write_rust "$scratch/project" ;;
+      *) git clone -q -- "$2" "$scratch/project" ;;
+    esac
+    echo "$scratch/project"
+    ;;
+  stale)
+    # An earlier run's report: every line of the source file hit once.
+    [[ $# -eq 4 ]] || usage
+    project=$2 report=$3 source=$4
+    require_scratch stale "$project"
+    lines=$(wc -l <"$project/$source")
+    mkdir -p "$(dirname "$project/$report")"
+    {
+      echo "SF:$source"
+      for ((line = 1; line <= lines; line++)); do echo "DA:$line,1"; done
+      echo "LF:$lines"
+      echo "LH:$lines"
+      echo "end_of_record"
+    } >"$project/$report"
+    touch -d '2 days ago' "$project/$report"
+    echo "wrote $report: $lines of $lines lines of $source covered, dated 2 days ago"
+    ;;
+  drive)
+    shift
+    path=$PATH
+    if [[ ${1:-} == --path ]]; then
+      [[ $# -ge 2 ]] || usage
+      path=$2
+      shift 2
+    fi
+    [[ $# -ge 2 ]] || usage
+    project=$1 transcript=$2
+    shift 2
+    require_scratch drive "$project"
+    record "$project" "$transcript" "crapper$(quoted "$@")" "$path" "$crapper" "$@"
+    ;;
+  exec)
+    [[ $# -ge 4 ]] || usage
+    project=$2 transcript=$3
+    shift 3
+    require_scratch exec "$project"
+    record "$project" "$transcript" "$(quoted "$@" | cut -c2-)" "$PATH" "$@"
+    ;;
+  cleanup)
+    [[ $# -eq 2 ]] || usage
+    root=$(scratch_root "$2") || { echo "cleanup: refusing to remove $2; it is not a verify-crapper scratch folder"; exit 1; }
+    path=$(realpath -m -- "$2")
+    [[ $path == "$root" || $path == "$root/project" ]] || { echo "cleanup: refusing to remove $2; pass the project or its scratch folder"; exit 1; }
+    rm -rf -- "$root"
+    echo "removed $root"
+    ;;
+  *) usage ;;
+esac
