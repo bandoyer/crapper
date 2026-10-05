@@ -74,3 +74,28 @@ def test_drive_and_stale_refuse_a_real_folder(tmp_path, decoy, command):
     assert refused.returncode == 1
     assert "refusing" in refused.stdout
     assert sorted(path.name for path in decoy.iterdir()) == ["keep.txt"]
+
+
+def test_doctor_says_when_cargo_llvm_cov_cannot_run_in_a_scratch_project(tmp_path):
+    """A mise shim is on PATH but has no toolchain outside a project with mise.toml."""
+
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    for name in ("cargo", "cargo-llvm-cov"):
+        shim = fake / name
+        shim.write_text(
+            "#!/bin/sh\necho 'mise ERROR No version is set for shim: cargo' >&2\nexit 1\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+    (tmp_path / "scratch").mkdir()
+    doctor = subprocess.run(
+        [str(HELPER), "doctor"],
+        env={**os.environ, "TMPDIR": str(tmp_path / "scratch"), "PATH": f"{fake}:/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert doctor.returncode == 0, doctor.stdout + doctor.stderr
+    assert "cargo llvm-cov fails in a scratch project" in doctor.stdout
+    assert list((tmp_path / "scratch").glob("crapper-verify.*")) == []
