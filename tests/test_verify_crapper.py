@@ -76,6 +76,19 @@ def test_drive_and_stale_refuse_a_real_folder(tmp_path, decoy, command):
     assert sorted(path.name for path in decoy.iterdir()) == ["keep.txt"]
 
 
+def test_a_drive_from_a_subfolder_shows_the_snapshot_root_wrote(tmp_path, decoy):
+    """A drive from a member crate with `--root ..` writes the snapshot at the top, and its transcript shows it."""
+
+    made = _helper(tmp_path, "project", "rust-workspace")
+    assert made.returncode == 0, made.stderr
+    project = Path(made.stdout.strip())
+    transcript = tmp_path / "t.txt"
+    driven = _helper(tmp_path, "drive", str(project / "gears"), str(transcript), "--root", "..", "--no-coverage")
+    assert driven.returncode == 0, driven.stdout + driven.stderr
+    snapshot = transcript.read_text().split("--- .metrics/crap.edn\n")[1].split("--- tracked")[0]
+    assert ':name "tick"' in snapshot and ':name "spin"' in snapshot
+
+
 def test_doctor_says_when_cargo_llvm_cov_cannot_run_in_a_scratch_project(tmp_path):
     """A mise shim is on PATH but has no toolchain outside a project with mise.toml."""
 
