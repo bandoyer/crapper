@@ -1,11 +1,12 @@
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from crapper.cli import GitError, _changed_files, _positionals, _take, main, parse_args, run
+from crapper.cli import HELP, GitError, _changed_files, _positionals, _take, main, parse_args, run
 from crapper.discover import is_test_file, language_of
 
 
@@ -215,6 +216,19 @@ def test_parse_args_reads_the_process_arguments_after_the_program(monkeypatch):
     assert options.threshold == 5.0
     assert options.positionals == []
     assert options.action == "analyze"
+
+
+def test_every_number_option_in_the_help_rejects_values_that_are_not_finite():
+    numbers = re.findall(r"^  (--[\w-]+) <number>", HELP, re.MULTILINE)
+    assert "--threshold" in numbers
+    largest_finite, past_it = "1.79769313486231580793e308", "1.79769313486231580794e308"
+    for option in numbers:
+        for value in ["nan", "inf", "+inf", "1e309", past_it, "abc"]:
+            options = parse_args([option, value])
+            assert options.exit_code == 1, (option, value)
+            assert options.message.startswith(f"{option} requires a finite number\n"), (option, value)
+    assert parse_args(["--threshold", "0"]).threshold == 0.0
+    assert parse_args(["--threshold", largest_finite]).threshold == float(largest_finite)
 
 
 def test_flags_that_only_store_a_boolean():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -108,6 +109,16 @@ def _take(args: list[str], index: int, option: str) -> str:
     return args[index + 1]
 
 
+def _finite(value: str, option: str) -> float:
+    try:
+        number = float(value)
+    except ValueError:
+        number = math.nan
+    if not math.isfinite(number):
+        raise ValueError(f"{option} requires a finite number")
+    return number
+
+
 def parse_args(argv: list[str] | None = None) -> Options:
     args = list(sys.argv[1:] if argv is None else argv)
     if any(arg in {"-h", "--help"} for arg in args):
@@ -130,11 +141,7 @@ def parse_args(argv: list[str] | None = None) -> Options:
                 index += 2
                 continue
             if arg == "--threshold":
-                raw = _take(args, index, arg)
-                try:
-                    options.threshold = float(raw)
-                except ValueError as exc:
-                    raise ValueError("--threshold requires a number") from exc
+                options.threshold = _finite(_take(args, index, arg), arg)
                 index += 2
                 continue
             if arg == "--no-coverage":
