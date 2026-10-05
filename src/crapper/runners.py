@@ -423,7 +423,6 @@ def _cover_clojure(root: Path) -> None:
     if not (root / "deps.edn").is_file() and not (root / "bb.edn").is_file():
         _warn("No deps.edn or bb.edn; skipping Clojure coverage.")
         return
-    _clean_clojure(root)
     code = run_shell(["clj", "-M:cov", "--lcov"], root)
     if code != 0:
         _warn("clj -M:cov --lcov failed; retrying without --lcov.")
@@ -529,8 +528,6 @@ def _cover_python(root: Path, files: list[Path]) -> None:
             continue
         report.parent.mkdir(parents=True, exist_ok=True)
         data_file = report.parent / ".coverage"
-        report.unlink(missing_ok=True)
-        data_file.unlink(missing_ok=True)
         run_cmd, lcov_cmd = python_coverage_commands(
             py, _python_kind(py, package), data_file, report, python_sources(package, files)
         )
@@ -548,10 +545,26 @@ def _cover_rust(root: Path, files: list[Path]) -> None:
     for module in modules:
         report = _coverage_report(root, module, "rust")
         report.parent.mkdir(parents=True, exist_ok=True)
-        report.unlink(missing_ok=True)
         code = run_shell(rust_coverage_command(kind, report), module)
         if code != 0:
             _warn(f"Rust coverage exited {code} in {module}. Rust coverage will score 0%.")
+
+
+def _clear_reports(root: Path, languages: set[str]) -> None:
+    """Remove the reports crapper's collectors write for these languages.
+
+    The loader reads every report on disk. Clearing first means a collector
+    that fails, writes nothing, or finds no tool leaves no earlier run's
+    report behind to be read as this run's coverage.
+    """
+
+    for language in languages & {"typescript", "python", "rust"}:
+        _clean_dir(root / "target" / "coverage" / language)
+    if "typescript" in languages:
+        for path in root.glob("coverage/**/lcov.info"):
+            path.unlink()
+    if "clojure" in languages:
+        _clean_clojure(root)
 
 
 def run_coverage(root: Path, files: list[Path], command: str | None) -> int:
@@ -559,7 +572,8 @@ def run_coverage(root: Path, files: list[Path], command: str | None) -> int:
 
     Returns the custom command's status. A non-zero status means the caller
     must not read reports already on disk. Per-language runs return 0; a
-    failed tool is reported and that language scores 0% when it wrote nothing.
+    failed tool is reported, and that language scores 0% when it wrote nothing,
+    because its earlier reports are cleared first.
     """
 
     root = root.resolve()
@@ -573,6 +587,7 @@ def run_coverage(root: Path, files: list[Path], command: str | None) -> int:
         return code
 
     languages = _languages_in(files)
+    _clear_reports(root, languages)
     if "clojure" in languages:
         _cover_clojure(root)
     if "java" in languages:
