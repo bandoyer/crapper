@@ -262,3 +262,10 @@ def test_a_source_is_matched_to_its_report_under_the_root_not_the_current_folder
     if len(scored) == 2:
         want |= {"idle": 0.0, "spin": 100.0}
     assert {entry.name: entry.coverage for entry in entries} == want
+
+
+def test_without_a_root_a_source_has_no_absolute_candidate():
+    """A bundle that was never bound to a root doesn't guess one: `pkg/src/lib.rs` doesn't take `pkg/lib.rs`."""
+
+    bundle = CoverageBundle(lcov={"pkg/lib.rs": {1: (1, 1)}})
+    assert bundle.percent_for(function(path="pkg/src/lib.rs", start_line=1, end_line=1)) is None

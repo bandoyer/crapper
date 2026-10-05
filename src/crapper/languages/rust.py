@@ -9,6 +9,7 @@ Test code is not scored: bodies inside `mod tests`, and a function that has a
 test attribute or sits in a `mod` or `impl` that has one. A test attribute is
 one whose path ends in `test` (`#[test]`, `#[tokio::test]`), `#[rstest]`, or a
 `cfg` that holds only in a test build (`test`, or `all(...)` with such a part).
+An inner `#![cfg(test)]` marks the file or `mod` body it starts.
 """
 
 import re
@@ -37,6 +38,7 @@ _DECISIONS = {
 }
 _TEST_ATTRIBUTES = {"test", "rstest"}
 _BEFORE_ITEM = {"attribute_item", "line_comment", "block_comment"}
+_BODIES = {"source_file", "declaration_list"}
 _PACKAGE_BLOCK = re.compile(r"(?ms)^\[package\](.*?)(?:^\[|\Z)")
 _NAME = re.compile(r'(?m)^name\s*=\s*"([^"]+)"')
 
@@ -99,19 +101,27 @@ def _is_test_attribute(data: bytes, attribute) -> bool:
     return path.split("::")[-1] in _TEST_ATTRIBUTES
 
 
-def _attributes(item):
-    """The attributes written before an item, past any comments between them."""
+def _attribute_items(node):
+    """A node's attribute items: inner `#![...]` ones when it is a file or a `mod`
+    body, and outer ones written before it, with any comments between them."""
 
-    current = item.prev_sibling
+    if node.type in _BODIES:
+        yield from (child for child in node.children if child.type == "inner_attribute_item")
+    current = node.prev_sibling
     while current is not None and current.type in _BEFORE_ITEM:
-        attribute = child_of_type(current, "attribute")
-        if attribute is not None:
-            yield attribute
+        yield current
         current = current.prev_sibling
 
 
+def _attributes(node):
+    for item in _attribute_items(node):
+        attribute = child_of_type(item, "attribute")
+        if attribute is not None:
+            yield attribute
+
+
 def _in_test_code(data: bytes, node) -> bool:
-    """The function, or a `mod` or `impl` around it, has a test attribute."""
+    """The function, or a `mod`, `impl`, or file around it, has a test attribute."""
 
     current = node
     while current is not None:

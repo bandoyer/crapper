@@ -52,10 +52,10 @@ $vc exec "$project" <transcript> <command> [args...]
 `drive` runs this checkout's `./crapper <args...>` with the project as the working directory, exactly as a user would type it there. `exec` runs any other command the same way. Both append one block to `<transcript>` and also print it:
 
 - the command, any `PATH` override, the date and time, the crapper commit, and the exit code
-- the coverage reports on disk before the run (`lcov.info`, `coverage.out`, `jacoco.xml`, with modification times)
+- the coverage reports on disk before the run (`lcov.info`, `coverage.out`, `jacoco.xml`, with modification times), listed from the project's top folder even when `<project>` is a folder inside it
 - stdout and stderr
 - the coverage reports on disk after the run
-- `.metrics/crap.edn`
+- `.metrics/crap.edn`, and any other `.metrics/crap.edn` in the project, headed by its path (a run with `--root` writes it there)
 - tracked files changed in the project (`(none)` when crapper left the source alone)
 
 The features you can drive, and the end state that proves each one, are in [features/README.md](features/README.md).

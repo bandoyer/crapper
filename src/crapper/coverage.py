@@ -215,7 +215,7 @@ def _candidates(source_path: str, root: Path | None) -> list[str]:
     """
 
     relative = normalize_path(source_path)
-    absolute = normalize_path((root / source_path).resolve().as_posix()) if source_path and root else relative
+    absolute = normalize_path((root / source_path).resolve().as_posix()) if source_path and root else ""
     no_src = re.sub(r"^src/", "", relative)
     absolute_no_src = re.sub(r"/src/", "/", absolute)
     values = [relative, absolute, no_src, absolute_no_src]

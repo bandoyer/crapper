@@ -118,6 +118,7 @@ def test_nested_module_path(tmp_path):
         "#[cfg(all(unix, all(test, feature = \"x\")))]\nfn hidden() {}",
         "#[cfg(test)]\nmod checks {\n    fn hidden() {}\n}",
         "#[cfg(test)]\nimpl Dial {\n    fn hidden(&self) {}\n}",
+        "mod checks {\n    #![cfg(test)]\n    fn hidden() {}\n}",
     ],
 )
 def test_rust_test_code_is_not_scored(item):
@@ -143,4 +144,13 @@ def test_rust_test_code_is_not_scored(item):
 )
 def test_rust_functions_with_other_attributes_are_scored(attribute):
     source = f"{attribute}\npub fn kept() {{}}\n"
+    assert [fn.name for fn in functions_in_source(source, "/tmp/lib.rs")] == ["kept"]
+
+
+def test_a_rust_file_marked_test_only_scores_nothing():
+    assert functions_in_source("#![cfg(test)]\n\npub fn helper() {}\n", "/tmp/lib.rs") == []
+
+
+def test_other_inner_attributes_keep_a_rust_function_scored():
+    source = "#![allow(dead_code)]\n\nmod gears {\n    #![allow(unused)]\n    pub fn kept() {}\n}\n"
     assert [fn.name for fn in functions_in_source(source, "/tmp/lib.rs")] == ["kept"]

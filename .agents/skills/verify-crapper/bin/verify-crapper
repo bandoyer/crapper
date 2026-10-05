@@ -221,14 +221,30 @@ reports() {
     \( -name lcov.info -o -name coverage.out -o -name jacoco.xml \) -printf '%p  %TF %TT\n' | sort)
 }
 
-# Runs "$@" in the project and appends the action, what the user saw, and the state left behind.
+# Prints each .metrics/crap.edn in the project at $1, so a run from a subfolder, or with
+# --root naming a subfolder, still shows its snapshot. The one at the top prints
+# alone; any other is headed by its path.
+snapshots() {
+  local top=$1 found=no file
+  while IFS= read -r file; do
+    found=yes
+    [[ $file == ./.metrics/crap.edn ]] || echo "($file)"
+    cat "$top/$file"
+  done < <(cd "$top" && find . \( -path ./node_modules -o -path ./.git \) -prune -o -path '*/.metrics/crap.edn' -print | sort)
+  [[ $found == yes ]] || echo "(none)"
+}
+
+# Runs "$@" in the project folder and appends the action, what the user saw, and
+# the state left behind. Reports and snapshots are listed from the project's top
+# folder, wherever in it the command ran.
 record() {
   local project=$1 transcript=$2 shown=$3 path=$4
   shift 4
   mkdir -p "$(dirname "$transcript")"
-  local out err code before
+  local out err code before top
   out=$(mktemp) err=$(mktemp)
-  before=$(reports "$project")
+  top=$(git -C "$project" rev-parse --show-toplevel)
+  before=$(reports "$top")
   set +e
   (cd "$project" && PATH="$path" "$@") >"$out" 2>"$err"
   code=$?
@@ -242,8 +258,8 @@ record() {
     echo "--- coverage reports before"; grep . <<<"$before" || echo "(none)"
     echo "--- stdout"; cat "$out"
     echo "--- stderr"; cat "$err"
-    echo "--- coverage reports after"; reports "$project" | grep . || echo "(none)"
-    echo "--- .metrics/crap.edn"; cat "$project/.metrics/crap.edn" 2>/dev/null || echo "(none)"
+    echo "--- coverage reports after"; reports "$top" | grep . || echo "(none)"
+    echo "--- .metrics/crap.edn"; snapshots "$top"
     echo "--- tracked files changed (git status --short)"
     git -C "$project" status --short --untracked-files=no | grep . || echo "(none)"
     echo
