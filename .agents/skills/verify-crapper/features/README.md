@@ -28,6 +28,6 @@ This folder is the maintained source for verifying what a crapper user sees. Rea
 - [Score with a custom coverage command](./coverage-command.md) covers `--coverage-command`: crapper runs the given command, then reads the reports on disk, combining reports that name the same file.
 - [Score with existing coverage](./existing-coverage.md) covers `--use-existing-coverage`: it reads the reports already on disk, runs no coverage command, and deletes nothing.
 - [Complexity only](./no-coverage.md) covers `--no-coverage`: coverage and CRAP are `N/A`.
-- [Threshold](./threshold.md) covers `--threshold`: exit 2 when the worst score is above it.
+- [Threshold](./threshold.md) covers `--threshold`: exit 2 when the worst score is above it, and a usage error when the threshold is not a finite number.
 - [A run with no source files](./empty-run.md) covers a full scan, a filter, or `--changed` that selects nothing: the snapshot becomes `{:entries []}`, and a failed run keeps it.
 - [Install with the lowest dependencies](./install-minimum.md) covers running crapper with every direct dependency at the lowest version `pyproject.toml` allows.
