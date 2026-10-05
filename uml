@@ -21,13 +21,13 @@ DEPS="{:deps {uml-viewer/uml-viewer {:local/root \"$VIEWER\"} quil/quil {:mvn/ve
 edn_path() (
   name="$(basename "$ROOT")"
   if [ -f "examples/${name}.edn" ]; then
-    echo "examples/${name}.edn"
+    printf '%s\n' "examples/${name}.edn"
     return
   fi
   for f in examples/*.edn; do
     [ -f "$f" ] || continue
     case "$f" in *.policy.edn) continue ;; esac
-    echo "$f"
+    printf '%s\n' "$f"
     return
   done
 )

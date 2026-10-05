@@ -737,8 +737,9 @@ def test_uml_loader_prints_its_usage(tmp_path):
         (["a.policy.edn", "b.edn", "c.edn"], ["examples/b.edn"]),
         (["a.policy.edn"], []),
         ([], []),
+        (["a\\c.edn"], ["examples/a\\c.edn"]),
     ],
-    ids=["own-name", "skips-policy", "only-policy", "no-examples"],
+    ids=["own-name", "skips-policy", "only-policy", "no-examples", "backslash"],
 )
 def test_uml_loader_restarts_the_viewer_on_an_example(tmp_path, examples, chosen):
     completed = _launch_uml(tmp_path, ["--restart"], examples)
