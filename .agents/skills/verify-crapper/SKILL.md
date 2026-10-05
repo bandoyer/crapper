@@ -27,7 +27,7 @@ It is ready when `$vc doctor` prints `doctor: ok`. Teardown is `$vc cleanup <pro
 $vc doctor
 ```
 
-It changes no project file. It fails if the launcher is missing, `./crapper --help` fails, or `.venv` imports `crapper` from anywhere but this checkout's `src/`. On success it prints the Python version, the imported path, the checkout's commit and branch (and whether `src/`, the launcher, or `pyproject.toml` have uncommitted changes), and whether `npm` and `cargo-llvm-cov` are on `PATH`.
+It changes no project file. It fails if the launcher is missing, `./crapper --help` fails, or `.venv` imports `crapper` from anywhere but this checkout's `src/`. On success it prints the Python version, the imported path, the checkout's commit and branch (and whether `src/`, the launcher, or `pyproject.toml` have uncommitted changes), whether `npm` and `cargo-llvm-cov` are on `PATH`, and whether `cargo llvm-cov` runs in a scratch project. When it doesn't and cargo comes from mise, export `MISE_RUST_VERSION` (for example `1.98.0`) before a Rust drive.
 
 ## Drive
 
