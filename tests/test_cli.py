@@ -416,6 +416,57 @@ def test_a_report_this_run_wrote_is_read(tmp_path, monkeypatch):
     assert ":coverage 100.0, :crap 1.0" in text
 
 
+_SPLIT_LIB = (
+    "pub fn tick() -> i32 {\n    1\n}\n\n"
+    "pub fn tock() -> i32 {\n    2\n}\n\n"
+    "pub fn idle() -> i32 {\n    3\n}\n\n"
+    "pub fn pick(flag: bool) -> i32 {\n    if flag { 1 } else { 2 }\n}\n"
+)
+
+
+def _llvm_cov_record(source: Path, tick: int, tock: int, taken: tuple[str, str]) -> str:
+    """One LCOV record shaped like cargo-llvm-cov's: absolute SF, DA for every line, --branch BRDA."""
+
+    hits = {1: tick, 2: tick, 3: tick, 5: tock, 6: tock, 7: tock, 9: 0, 10: 0, 11: 0, 13: 1, 14: 1, 15: 1}
+    lines = [f"SF:{source}"]
+    lines += [f"DA:{line},{hit}" for line, hit in hits.items()]
+    lines += [f"BRDA:14,0,0,{taken[0]}", f"BRDA:14,0,1,{taken[1]}", "end_of_record"]
+    return "\n".join(lines) + "\n"
+
+
+def _scores_from_split_runs(root: Path, placement: str, unit: str, integration: str) -> dict[str, float]:
+    _write(root, "Cargo.toml", "[package]\nname = 'clock'\n")
+    _write(root, "src/lib.rs", _SPLIT_LIB)
+    if placement == "one-report":
+        _write(root, "target/coverage/rust/lcov.info", unit + integration)
+    else:
+        _write(root, "target/coverage/rust/unit/lcov.info", unit)
+        _write(root, "target/coverage/rust/integration/lcov.info", integration)
+    assert run(["--root", str(root), "--use-existing-coverage"]) == 0
+    text = (root / ".metrics" / "crap.edn").read_text(encoding="utf-8")
+    import re
+
+    return {name: float(value) for name, value in re.findall(r':name "(\w+)".*?:coverage ([\d.]+)', text)}
+
+
+@pytest.mark.parametrize("placement", ["one-report", "two-reports"])
+def test_records_for_the_same_file_combine(tmp_path, placement):
+    source = (tmp_path / "src" / "lib.rs").resolve()
+    unit = _llvm_cov_record(source, tick=0, tock=1, taken=("1", "0"))
+    integration = _llvm_cov_record(source, tick=1, tock=0, taken=("0", "1"))
+    scores = _scores_from_split_runs(tmp_path, placement, unit, integration)
+    assert scores == {"tick": 100.0, "tock": 100.0, "idle": 0.0, "pick": 100.0}
+
+
+@pytest.mark.parametrize("placement", ["one-report", "two-reports"])
+def test_a_branch_taken_in_one_record_and_unreached_in_the_other_counts_once(tmp_path, placement):
+    source = (tmp_path / "src" / "lib.rs").resolve()
+    unit = _llvm_cov_record(source, tick=0, tock=1, taken=("1", "-"))
+    integration = _llvm_cov_record(source, tick=1, tock=0, taken=("-", "1"))
+    scores = _scores_from_split_runs(tmp_path, placement, unit, integration)
+    assert scores["pick"] == 100.0
+
+
 def test_changed_files_from_a_real_git_status(tmp_path):
     _git = ["git", "-C", str(tmp_path)]
     subprocess.run([*_git, "init"], check=True, capture_output=True)
