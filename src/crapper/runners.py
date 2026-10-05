@@ -1,4 +1,4 @@
-"""Run each language's coverage tool, then leave the reports for the loader.
+"""Run each language's coverage tool, and list the reports it wrote for the loader.
 
 Failures are reported and do not stop analysis. A language with no coverage
 tool, or a failed run, scores its functions at 0%.
@@ -13,6 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from crapper.coverage import Report
 from crapper.discover import is_test_file, language_of
 
 _MAVEN = [
@@ -279,12 +280,10 @@ def _vitest_coverage_command(package: Path, files: list[Path], report_dir: Path)
 
 
 def _coverage_report(root: Path, module: Path, language: str) -> Path:
+    """`target/coverage/<language>/<module folder>/lcov.info`, one folder per module."""
+
     root = root.resolve()
-    module = module.resolve()
-    if module == root:
-        return root / "target" / "coverage" / language / "lcov.info"
-    slug = module.relative_to(root).as_posix().replace("/", "__")
-    return root / "target" / "coverage" / language / slug / "lcov.info"
+    return root / "target" / "coverage" / language / module.resolve().relative_to(root) / "lcov.info"
 
 
 def rust_modules(root: Path, files: list[Path]) -> list[Path]:
@@ -419,46 +418,54 @@ def _modules_with(files: list[Path], suffix: str, marker: str, root: Path) -> li
     return sorted(modules)
 
 
-def _cover_clojure(root: Path) -> None:
+def _cover_clojure(root: Path) -> list[Report]:
     if not (root / "deps.edn").is_file() and not (root / "bb.edn").is_file():
         _warn("No deps.edn or bb.edn; skipping Clojure coverage.")
-        return
+        return []
     code = run_shell(["clj", "-M:cov", "--lcov"], root)
     if code != 0:
         _warn("clj -M:cov --lcov failed; retrying without --lcov.")
         code = run_shell(["clj", "-M:cov"], root)
     if code != 0:
         _warn(f"Clojure coverage exited {code}. Clojure coverage will score 0%.")
+    return [Report(root / "target" / "coverage" / "lcov.info", root)]
 
 
-def _cover_java(root: Path, files: list[Path]) -> None:
+def _cover_java(root: Path, files: list[Path]) -> list[Report]:
     modules = _modules_with(files, ".java", "pom.xml", root)
     if not modules:
         _warn("No pom.xml; skipping Java coverage.")
-        return
+        return []
+    reports = []
     for module in modules:
-        _clean_dir(module / "target" / "site" / "jacoco")
+        report = module / "target" / "site" / "jacoco" / "jacoco.xml"
+        reports.append(Report(report, module))
+        _clean_dir(report.parent)
         exec_file = module / "target" / "jacoco.exec"
         if exec_file.exists():
             exec_file.unlink()
         code = run_shell(_MAVEN, module)
         if code != 0:
             _warn(f"Java coverage exited {code} in {module}. Java coverage will score 0%.")
+    return reports
 
 
-def _cover_go(root: Path, files: list[Path]) -> None:
+def _cover_go(root: Path, files: list[Path]) -> list[Report]:
     modules = _modules_with(files, ".go", "go.mod", root)
     if not modules:
         _warn("No go.mod; skipping Go coverage.")
-        return
+        return []
+    reports = []
     for module in modules:
         profile = module / "target" / "coverage" / "go" / "coverage.out"
+        reports.append(Report(profile, module))
         profile.parent.mkdir(parents=True, exist_ok=True)
         if profile.exists():
             profile.unlink()
         code = run_shell(["go", "test", "./...", f"-coverprofile={profile}"], module)
         if code != 0:
             _warn(f"Go coverage exited {code} in {module}. Go coverage will score 0%.")
+    return reports
 
 
 def _prepare_report(report: Path) -> None:
@@ -467,11 +474,19 @@ def _prepare_report(report: Path) -> None:
     report.parent.mkdir(parents=True, exist_ok=True)
 
 
-def _cover_typescript(root: Path, files: list[Path]) -> None:
+def _remove_lcov(folder: Path) -> None:
+    """Remove `coverage/**/lcov.info` under `folder`, where a package's own coverage script writes."""
+
+    for path in folder.glob("coverage/**/lcov.info"):
+        path.unlink()
+
+
+def _cover_typescript(root: Path, files: list[Path]) -> list[Report]:
     packages = typescript_packages(root, files)
     if not packages:
         _warn("No package.json; skipping TypeScript coverage.")
-        return
+        return []
+    reports = []
     for package in packages:
         report = _coverage_report(root, package, "typescript")
         try:
@@ -485,9 +500,13 @@ def _cover_typescript(root: Path, files: list[Path]) -> None:
         if _needs_vitest_provider(command) and not _ensure_vitest_coverage(package):
             continue
         _prepare_report(report)
+        _remove_lcov(package)
         code = run_shell(command, package)
         if code != 0:
             _warn(f"TypeScript coverage exited {code} in {package}. TypeScript coverage will score 0%.")
+        reports.append(Report(report, package))
+        reports.extend(Report(path, package) for path in package.glob("coverage/**/lcov.info"))
+    return reports
 
 
 def _needs_vitest_provider(command: list[str]) -> bool:
@@ -519,9 +538,11 @@ def _record_python_lcov(
         _warn(f"Python tests exited {code} in {package}. Coverage was still recorded.")
 
 
-def _cover_python(root: Path, files: list[Path]) -> None:
+def _cover_python(root: Path, files: list[Path]) -> list[Report]:
+    reports = []
     for package in python_roots(root, files):
         report = _coverage_report(root, package, "python")
+        reports.append(Report(report, package))
         py = _python_executable(package)
         if not _ensure_python_module(py, package, "coverage"):
             _warn(f"coverage is missing in {package}. Python coverage will score 0%.")
@@ -532,22 +553,26 @@ def _cover_python(root: Path, files: list[Path]) -> None:
             py, _python_kind(py, package), data_file, report, python_sources(package, files)
         )
         _record_python_lcov(package, run_shell(run_cmd, package), data_file, lcov_cmd)
+    return reports
 
 
-def _cover_rust(root: Path, files: list[Path]) -> None:
+def _cover_rust(root: Path, files: list[Path]) -> list[Report]:
     modules = rust_modules(root, files)
     if not modules:
         _warn("No Cargo.toml; skipping Rust coverage.")
-        return
+        return []
     kind = _rust_kind()
     if kind is None:
-        return
+        return []
+    reports = []
     for module in modules:
         report = _coverage_report(root, module, "rust")
+        reports.append(Report(report, module))
         report.parent.mkdir(parents=True, exist_ok=True)
         code = run_shell(rust_coverage_command(kind, report), module)
         if code != 0:
             _warn(f"Rust coverage exited {code} in {module}. Rust coverage will score 0%.")
+    return reports
 
 
 def _clear_reports(root: Path, languages: set[str]) -> None:
@@ -561,43 +586,53 @@ def _clear_reports(root: Path, languages: set[str]) -> None:
     for language in languages & {"typescript", "python", "rust"}:
         _clean_dir(root / "target" / "coverage" / language)
     if "typescript" in languages:
-        for path in root.glob("coverage/**/lcov.info"):
-            path.unlink()
+        _remove_lcov(root)
     if "clojure" in languages:
         _clean_clojure(root)
 
 
-def run_coverage(root: Path, files: list[Path], command: str | None) -> int:
-    """Generate coverage reports for the languages present in `files`.
+def collect_coverage(root: Path, files: list[Path]) -> list[Report]:
+    """Run each language's coverage tool and return the reports this run wrote.
 
-    Returns the custom command's status. A non-zero status means the caller
-    must not read reports already on disk. Per-language runs return 0; a
-    failed tool is reported, and that language scores 0% when it wrote nothing,
-    because its earlier reports are cleared first.
+    Each collector clears its report paths before it runs, so a path that
+    exists afterward holds this run's report. A failed tool is reported, and
+    its language scores 0% because it wrote nothing.
     """
 
     root = root.resolve()
+    languages = _languages_in(files)
+    _clear_reports(root, languages)
+    reports: list[Report] = []
+    if "clojure" in languages:
+        reports += _cover_clojure(root)
+    if "java" in languages:
+        reports += _cover_java(root, files)
+    if "go" in languages:
+        reports += _cover_go(root, files)
+    if "typescript" in languages:
+        reports += _cover_typescript(root, files)
+    if "python" in languages:
+        reports += _cover_python(root, files)
+    if "rust" in languages:
+        reports += _cover_rust(root, files)
+    return [report for report in reports if report.path.is_file()]
+
+
+def run_coverage(root: Path, files: list[Path], command: str | None) -> int:
+    """Generate coverage reports for the languages present in `files`, or run `command`.
+
+    Returns the custom command's status. A non-zero status means the caller
+    must not read reports already on disk. Per-language runs return 0 (see
+    `collect_coverage`, which also lists the reports they wrote).
+    """
+
     if command:
-        code = run_shell(command, root)
+        code = run_shell(command, root.resolve())
         if code != 0:
             _warn(
                 f"Coverage command exited {code}. "
                 "Reports already on disk will not be read."
             )
         return code
-
-    languages = _languages_in(files)
-    _clear_reports(root, languages)
-    if "clojure" in languages:
-        _cover_clojure(root)
-    if "java" in languages:
-        _cover_java(root, files)
-    if "go" in languages:
-        _cover_go(root, files)
-    if "typescript" in languages:
-        _cover_typescript(root, files)
-    if "python" in languages:
-        _cover_python(root, files)
-    if "rust" in languages:
-        _cover_rust(root, files)
+    collect_coverage(root, files)
     return 0

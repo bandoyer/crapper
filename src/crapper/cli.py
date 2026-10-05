@@ -21,7 +21,7 @@ from crapper.discover import (
 )
 from crapper.metrics import write_metrics
 from crapper.report import format_report
-from crapper.runners import run_coverage
+from crapper.runners import collect_coverage, run_coverage
 
 _SKIPPED_DIRS = ", ".join(sorted(SKIP_DIRS | TEST_DIRS))
 _TEST_PATTERNS = ", ".join(
@@ -285,8 +285,10 @@ def _coverage_bundle(options: Options, root: Path, files: list[Path]):
         return None
     if options.use_existing_coverage:
         return load_bundle(root)
+    if not options.coverage_command:
+        return load_bundle(root, collect_coverage(root, files))
     status = run_coverage(root, files, options.coverage_command)
-    if options.coverage_command and status not in (0, None):
+    if status not in (0, None):
         return CoverageBundle()
     return load_bundle(root)
 

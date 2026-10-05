@@ -5,6 +5,11 @@ instruction counters. Go uses statement profiles. LCOV scores a function by
 its BRDA branch records when it has any, and by line hits otherwise. LCOV
 records for the same file, in one report or several, combine into one.
 `percent_for` returns None when the file is absent; analysis turns that into 0%.
+
+`load_bundle(root, reports)` reads only the given reports, as a default run
+does with the ones its collectors wrote, and resolves a relative `SF:` path
+against the module that wrote the report. `load_bundle(root)` reads every
+report in the usual places, with `SF:` as written.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import unquote
 
 from crapper.model import Function
@@ -23,6 +29,7 @@ _SPAN = re.compile(
 _LCOV_DA = re.compile(r"DA:(\d+),(\d+)")
 _LCOV_BRDA = re.compile(r"BRDA:(\d+),([^,]*),([^,]*),(-|\d+)")
 _DOCTYPE = re.compile(r"<!DOCTYPE[^>]*>", re.IGNORECASE)
+_LCOV_SF = re.compile(r"^(\s*SF:)(.*?)\s*$", re.MULTILINE)
 
 
 class FileCoverage(dict):
@@ -492,53 +499,84 @@ def _read(path: Path) -> str | None:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
-def _lcov_paths(root: Path) -> list[Path]:
+class Report(NamedTuple):
+    """A coverage report, and the module folder its relative `SF:` paths start from.
+
+    `module` is None for a report found on disk, whose origin is unknown; its
+    paths stay as written.
+    """
+
+    path: Path
+    module: Path | None = None
+
+
+def _reports_on_disk(root: Path) -> list[Report]:
     paths = list(root.glob("target/coverage/**/lcov.info"))
     paths.extend(root.glob("coverage/**/lcov.info"))
-    return paths
+    paths.extend(
+        [
+            root / "target" / "coverage" / "coverage.out",
+            root / "target" / "coverage" / "go" / "coverage.out",
+            root / "coverage.out",
+        ]
+    )
+    paths.extend(root.glob("*/target/coverage/go/coverage.out"))
+    paths.extend(root.glob("*/*/target/coverage/go/coverage.out"))
+    paths.append(root / "target" / "site" / "jacoco" / "jacoco.xml")
+    paths.extend(root.glob("*/target/site/jacoco/jacoco.xml"))
+    paths.extend(root.glob("*/*/target/site/jacoco/jacoco.xml"))
+    return [Report(path) for path in paths]
 
 
-def _merge_texts(paths: list[Path]) -> list[str]:
-    texts: list[str] = []
+def _resolve_sources(text: str, module: Path) -> str:
+    """Rewrite each relative `SF:` path as the absolute path under `module`."""
+
+    def resolve(match: re.Match) -> str:
+        path = normalize_path(match.group(2))
+        if Path(path).is_absolute():
+            return match.group(0)
+        return match.group(1) + (module / path).resolve().as_posix()
+
+    return _LCOV_SF.sub(resolve, text)
+
+
+def _report_texts(reports: list[Report], name: str) -> list[tuple[Report, str]]:
+    """Each report file called `name`, once per file, with its text."""
+
+    texts: list[tuple[Report, str]] = []
     seen: set[Path] = set()
-    for path in paths:
-        resolved = path.resolve()
-        if resolved in seen:
+    for report in reports:
+        resolved = report.path.resolve()
+        if report.path.name != name or resolved in seen:
             continue
         seen.add(resolved)
-        text = _read(path)
+        text = _read(report.path)
         if text:
-            texts.append(text)
+            texts.append((report, text))
     return texts
 
 
-def _merge_lcov(root: Path) -> dict[str, FileCoverage]:
+def _merge_lcov(reports: list[Report]) -> dict[str, FileCoverage]:
     """Every report read as one, so a file named in two reports combines like a repeated record."""
 
-    return parse_lcov("\n".join(_merge_texts(_lcov_paths(root))))
-
-
-def _merge_go(root: Path) -> dict[str, list[tuple[int, int, int, int]]]:
-    paths = [
-        root / "target" / "coverage" / "coverage.out",
-        root / "target" / "coverage" / "go" / "coverage.out",
-        root / "coverage.out",
+    texts = [
+        text if report.module is None else _resolve_sources(text, report.module)
+        for report, text in _report_texts(reports, "lcov.info")
     ]
-    paths.extend(root.glob("*/target/coverage/go/coverage.out"))
-    paths.extend(root.glob("*/*/target/coverage/go/coverage.out"))
+    return parse_lcov("\n".join(texts))
+
+
+def _merge_go(reports: list[Report]) -> dict[str, list[tuple[int, int, int, int]]]:
     merged: dict[str, list[tuple[int, int, int, int]]] = {}
-    for text in _merge_texts(paths):
+    for _report, text in _report_texts(reports, "coverage.out"):
         for key, segments in parse_go_profile(text).items():
             merged.setdefault(key, []).extend(segments)
     return merged
 
 
-def _merge_jacoco(root: Path) -> dict[str, list[JacocoMethod]]:
-    paths = [root / "target" / "site" / "jacoco" / "jacoco.xml"]
-    paths.extend(root.glob("*/target/site/jacoco/jacoco.xml"))
-    paths.extend(root.glob("*/*/target/site/jacoco/jacoco.xml"))
+def _merge_jacoco(reports: list[Report]) -> dict[str, list[JacocoMethod]]:
     merged: dict[str, list[JacocoMethod]] = {}
-    for text in _merge_texts(paths):
+    for _report, text in _report_texts(reports, "jacoco.xml"):
         for key, methods in parse_jacoco_index(text).items():
             merged.setdefault(key, []).extend(methods)
     return merged
@@ -559,11 +597,15 @@ def _merge_forms(root: Path) -> dict[str, dict[int, tuple[int, int]]]:
     return found
 
 
-def load_bundle(root: Path) -> CoverageBundle:
-    go_profile = _merge_go(root)
-    jacoco = _merge_jacoco(root)
+def load_bundle(root: Path, reports: list[Report] | None = None) -> CoverageBundle:
+    """Coverage from `reports`, or from every report on disk when it is None."""
+
+    if reports is None:
+        reports = _reports_on_disk(root)
+    go_profile = _merge_go(reports)
+    jacoco = _merge_jacoco(reports)
     return CoverageBundle(
-        lcov=_merge_lcov(root),
+        lcov=_merge_lcov(reports),
         go_profile=go_profile or None,
         jacoco=jacoco or None,
         form_html=_merge_forms(root),

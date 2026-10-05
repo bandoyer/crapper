@@ -78,9 +78,11 @@ By default a run deletes the previous report for each language it is about to me
 | Clojure | `clj -M:cov --lcov` (needs `deps.edn` or `bb.edn`) | `target/coverage/` |
 | Java | JaCoCo Maven plugin `0.8.12` in each module with `pom.xml` | `target/site/jacoco/jacoco.xml` |
 | Go | `go test ./... -coverprofile=...` | `target/coverage/go/coverage.out` |
-| TypeScript | `npm run coverage`, or Vitest `--coverage`, or `npx c8 ... npm test` | `coverage/lcov.info` or `target/coverage/typescript/lcov.info` |
+| TypeScript | `npm run coverage`, or Vitest `--coverage`, or `npx c8 ... npm test`, per package | the package's `coverage/**/lcov.info` or `target/coverage/typescript/lcov.info` |
 | Rust | `cargo llvm-cov` or `cargo tarpaulin`, per Cargo package | `target/coverage/rust/lcov.info` |
 | Python | `coverage run` with pytest or unittest, then `coverage lcov` | `target/coverage/python/lcov.info` |
+
+A default run reads only the reports these commands wrote in this run. Another report on disk, such as a hand-made root `coverage.out` or a leftover `coverage/lcov.info` in a Rust package, is ignored and left in place. A relative `SF:` path in a report resolves against the module that wrote it (the Cargo package, Python project, or npm package), so two packages that both say `SF:src/core.py` keep their own coverage. `--use-existing-coverage` and `--coverage-command` read every report in the usual places, with paths as written.
 
 A missing tool or a failed test run scores that language at 0% and still writes the snapshot. Pass `--coverage-command` to replace those defaults with one command of your own. `--no-coverage` is the run that leaves coverage and CRAP as N/A.
 

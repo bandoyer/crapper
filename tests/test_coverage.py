@@ -1,5 +1,6 @@
 from crapper.coverage import (
     CoverageBundle,
+    Report,
     go_percent,
     load_bundle,
     parse_form_coverage,
@@ -171,3 +172,42 @@ def test_combined_records_keep_the_line_and_branch_shapes(tmp_path):
     record = load_bundle(tmp_path).lcov["src/app.ts"]
     assert dict(record) == {2: (1, 1), 3: (1, 1)}
     assert record.branches == {3: (2, 2)}
+
+
+def test_load_bundle_with_only_a_root_reads_every_report_on_disk_as_written(tmp_path):
+    """mutator and --use-existing-coverage call `load_bundle(root)`: every report, `SF:` kept as written."""
+
+    absolute = (tmp_path / "src" / "lib.rs").resolve().as_posix()
+    files = {
+        "coverage/lcov.info": "SF:src/lib.rs\nDA:5,1\nend_of_record\n",
+        "target/coverage/rust/lcov.info": f"SF:{absolute}\nDA:1,1\nend_of_record\n",
+        "coverage.out": "mode: set\nexample.com/clock/clock.go:3.17,5.2 1 1\n",
+        "a/b/target/site/jacoco/jacoco.xml": (
+            '<report><class name="demo/Clock"><method name="tick" line="4">'
+            '<counter type="INSTRUCTION" missed="0" covered="1"/></method></class></report>'
+        ),
+    }
+    for relative, text in files.items():
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    bundle = load_bundle(tmp_path)
+    assert {key: dict(lines) for key, lines in bundle.lcov.items()} == {
+        "src/lib.rs": {5: (1, 1)},
+        absolute: {1: (1, 1)},
+    }
+    assert list(bundle.go_profile) == ["example.com/clock/clock.go"]
+    assert list(bundle.jacoco) == ["demo.Clock#tick"]
+
+
+def test_a_listed_report_resolves_a_relative_source_against_its_module(tmp_path):
+    report = tmp_path / "target" / "coverage" / "python" / "one" / "lcov.info"
+    report.parent.mkdir(parents=True)
+    report.write_text(
+        "SF:src/core.py\nDA:1,1\nend_of_record\nSF:/elsewhere/x.py\nDA:2,1\nend_of_record\n",
+        encoding="utf-8",
+    )
+    bundle = load_bundle(tmp_path, [Report(report, tmp_path / "one")])
+    assert sorted(bundle.lcov) == sorted(
+        [(tmp_path / "one" / "src" / "core.py").resolve().as_posix(), "/elsewhere/x.py"]
+    )

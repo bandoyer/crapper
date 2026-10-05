@@ -349,9 +349,10 @@ _RS_PROJECT = {
 def _use_real_coverage(monkeypatch, shell, which=lambda _name: None):
     """Run the real collectors with commands and tool lookup faked at the process boundary."""
 
-    from crapper.runners import run_coverage
+    from crapper import runners
 
-    monkeypatch.setattr("crapper.cli.run_coverage", run_coverage)
+    monkeypatch.setattr("crapper.cli.run_coverage", runners.run_coverage)
+    monkeypatch.setattr("crapper.cli.collect_coverage", runners.collect_coverage)
     monkeypatch.setattr("crapper.runners.run_shell", shell)
     monkeypatch.setattr("crapper.runners.shutil.which", which)
 
@@ -414,6 +415,128 @@ def test_a_report_this_run_wrote_is_read(tmp_path, monkeypatch):
     assert run(["--root", str(tmp_path)]) == 0
     text = (tmp_path / ".metrics" / "crap.edn").read_text(encoding="utf-8")
     assert ":coverage 100.0, :crap 1.0" in text
+
+
+_JACOCO = (
+    '<report name="demo"><package name="demo"><class name="demo/Clock">'
+    '<method name="tick" desc="()I" line="4"><counter type="INSTRUCTION" missed="0" covered="2"/>'
+    "</method></class></package></report>\n"
+)
+_TWO_FN_LIB = "pub fn tick() -> i32 {\n    1\n}\n\npub fn tock() -> i32 {\n    2\n}\n"
+_GO_TICK = "package clock\n\nfunc Tick() int {\n\treturn 1\n}\n"
+_JAVA_TICK = "package demo;\n\npublic class Clock {\n    public int tick() {\n        return 1;\n    }\n}\n"
+
+
+def _fake_tools(command, cwd):
+    """Each coverage tool, writing its report where its command line says. Every test hits."""
+
+    cwd = Path(cwd)
+    if command[:2] == ["cargo", "llvm-cov"]:
+        source = cwd / "src" / "lib.rs"
+        lines = "".join(f"DA:{line},{int(line < 4)}\n" for line in (1, 2, 3, 5, 6, 7))
+        Path(command[-1]).write_text(f"SF:{source}\n{lines}end_of_record\n", encoding="utf-8")
+    elif command[:2] == ["go", "test"]:
+        module = (cwd / "go.mod").read_text(encoding="utf-8").split()[1]
+        profile = Path(command[-1].split("=", 1)[1])
+        profile.write_text(f"mode: set\n{module}/clock.go:3.17,5.2 1 1\n", encoding="utf-8")
+    elif command[0] == "mvn":
+        _write(cwd, "target/site/jacoco/jacoco.xml", _JACOCO)
+    elif command == ["npm", "run", "coverage"]:
+        _write(cwd, "coverage/lcov.info", "SF:src/clock.ts\nDA:1,1\nend_of_record\n")
+    elif command[1:4] == ["-m", "coverage", "run"]:
+        Path(command[4].split("=", 1)[1]).touch()
+    elif command[1:4] == ["-m", "coverage", "lcov"]:
+        hit = int((cwd / "test_core.py").is_file())
+        Path(command[-1]).write_text(f"SF:src/core.py\nDA:1,{hit}\nDA:2,{hit}\nend_of_record\n", encoding="utf-8")
+    return 0
+
+
+_RUST_LEFTOVER = {
+    "Cargo.toml": "[package]\nname = 'clock'\n",
+    "src/lib.rs": _TWO_FN_LIB,
+    "coverage/lcov.info": "SF:src/lib.rs\nDA:5,1\nDA:6,1\nDA:7,1\nend_of_record\n",
+}
+
+
+@pytest.mark.parametrize(
+    ("project", "llvm_cov", "want"),
+    [
+        pytest.param(_RUST_LEFTOVER, True, {"tick": 100.0, "tock": 0.0}, id="rust-leftover"),
+        pytest.param(_RUST_LEFTOVER, False, {"tick": 0.0, "tock": 0.0}, id="rust-no-report"),
+        pytest.param(
+            {
+                "one/pyproject.toml": "[project]\nname = 'one'\n",
+                "one/src/core.py": "def left():\n    return 1\n",
+                "one/test_core.py": "",
+                "two/pyproject.toml": "[project]\nname = 'two'\n",
+                "two/src/core.py": "def right():\n    return 2\n",
+            },
+            True,
+            {"left": 100.0, "right": 0.0},
+            id="python-two-pkgs",
+        ),
+        pytest.param(
+            {
+                "a/b/pyproject.toml": "[project]\nname = 'b'\n",
+                "a/b/src/core.py": "def left():\n    return 1\n",
+                "a__b/pyproject.toml": "[project]\nname = 'a__b'\n",
+                "a__b/src/core.py": "def right():\n    return 2\n",
+                "a__b/test_core.py": "",
+            },
+            True,
+            {"left": 0.0, "right": 100.0},
+            id="python-lookalike-folders",
+        ),
+        pytest.param(
+            {
+                "packages/app/package.json": '{"scripts": {"coverage": "sh coverage.sh"}}\n',
+                "packages/app/src/clock.ts": "export function tick(): number { return 1 }\n",
+            },
+            True,
+            {"tick": 100.0},
+            id="ts-nested-pkg",
+        ),
+        pytest.param(
+            {"a/b/c/go.mod": "module example.com/repo/a/b/c\n\ngo 1.21\n", "a/b/c/clock.go": _GO_TICK},
+            True,
+            {"Tick": 100.0},
+            id="go-deep-module",
+        ),
+        pytest.param(
+            {"clock.go": _GO_TICK, "coverage.out": "mode: set\nexample.com/clock/clock.go:3.17,5.2 1 1\n"},
+            True,
+            {"Tick": 0.0},
+            id="go-no-module",
+        ),
+        pytest.param(
+            {"a/b/c/pom.xml": "<project/>\n", "a/b/c/src/main/java/demo/Clock.java": _JAVA_TICK},
+            True,
+            {"tick": 100.0},
+            id="java-deep-module",
+        ),
+        pytest.param(
+            {"src/main/java/demo/Clock.java": _JAVA_TICK, "target/site/jacoco/jacoco.xml": _JACOCO},
+            True,
+            {"tick": 0.0},
+            id="java-no-pom",
+        ),
+    ],
+)
+def test_a_default_run_reads_only_the_reports_its_collectors_wrote(tmp_path, monkeypatch, project, llvm_cov, want):
+    for relative, text in project.items():
+        _write(tmp_path, relative, text)
+    _use_real_coverage(
+        monkeypatch, _fake_tools, lambda name: name if llvm_cov and name == "cargo-llvm-cov" else None
+    )
+    monkeypatch.chdir(tmp_path)
+    assert run(["--root", str(tmp_path)]) == 0
+    text = (tmp_path / ".metrics" / "crap.edn").read_text(encoding="utf-8")
+    import re
+
+    scores = {name: float(value) for name, value in re.findall(r':name "(\w+)".*?:coverage ([\d.]+)', text)}
+    assert scores == want
+    for relative in project:
+        assert (tmp_path / relative).is_file(), f"{relative} was deleted"
 
 
 _SPLIT_LIB = (

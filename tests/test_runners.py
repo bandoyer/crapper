@@ -542,3 +542,12 @@ def test_vitest_install_restores_manifests_when_install_changes_them(tmp_path, m
     monkeypatch.setattr("crapper.runners.run_shell", shell)
     assert _ensure_vitest_coverage(tmp_path) is False
     assert package_json.read_bytes() == b'{"name":"demo"}\n'
+
+
+def test_run_coverage_without_a_command_still_returns_zero(tmp_path, monkeypatch):
+    """mutator calls `run_coverage(root, files, None)` and stops on a non-zero int."""
+
+    monkeypatch.setattr("crapper.runners.run_shell", lambda *_args: 1)
+    _write(tmp_path, "go.mod", "module demo\n")
+    source = _write(tmp_path, "main.go", "package main\n")
+    assert run_coverage(tmp_path, [source], None) == 0
