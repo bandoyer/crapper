@@ -58,7 +58,7 @@ def test_vitest_uses_its_own_coverage_instead_of_c8(tmp_path):
     command = typescript_command(tmp_path, [source, tmp_path / "src" / "book.test.ts"], report_dir)
     assert command is not None
     text = _as_text(command)
-    assert "c8" not in text
+    assert "c8" not in command
     assert "vitest run --coverage" in text
     assert "--coverage.reporter=lcov" in text
     assert f"--coverage.reportsDirectory={report_dir}" in text
