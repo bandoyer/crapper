@@ -1,7 +1,9 @@
 import os
 import re
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -674,17 +676,84 @@ def test_a_run_with_no_source_files_empties_the_snapshot(tmp_path, capsys, args)
     assert (tmp_path / ".metrics" / "crap.edn").read_text(encoding="utf-8") == "{:entries []}\n"
 
 
-def test_uml_loader_rejects_a_missing_viewer(tmp_path):
-    script = Path(__file__).resolve().parents[1] / "uml"
-    completed = subprocess.run(
-        [str(script)],
-        env={**os.environ, "UML_VIEWER_ROOT": str(tmp_path / "missing")},
+# A stand-in for the Clojure CLI: it writes the arguments the launcher gave it.
+FAKE_CLOJURE = '#!/bin/sh\nprintf "%s\\n" "$@" > "$UML_ARGS.tmp" && mv "$UML_ARGS.tmp" "$UML_ARGS"\n'
+
+
+def _launch_uml(tmp_path, args, examples=(), viewer="uml viewer"):
+    """Run a copy of ./uml from `tmp_path/my project`, with a fake clojure and no zsh on PATH."""
+    project = tmp_path / "my project"
+    project.mkdir()
+    shutil.copy(Path(__file__).resolve().parents[1] / "uml", project / "uml")
+    for name in examples:
+        _write(project, f"examples/{name}", "{}\n")
+    _write(tmp_path, "bin/clojure", FAKE_CLOJURE)
+    (tmp_path / "bin" / "clojure").chmod(0o755)
+    (tmp_path / "uml viewer").mkdir()
+    return subprocess.run(
+        ["./uml", *args],
+        cwd=project,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin",
+            "UML_VIEWER_ROOT": str(tmp_path / viewer),
+            "UML_ARGS": str(tmp_path / "clojure-args"),
+        },
         capture_output=True,
         text=True,
         check=False,
+        timeout=10,
     )
+
+
+def _viewer_args(tmp_path):
+    """The launcher starts clojure in the background, so wait for its arguments."""
+    args_file = tmp_path / "clojure-args"
+    deadline = time.monotonic() + 10
+    while not args_file.exists():
+        assert time.monotonic() < deadline, "the launcher never started clojure"
+        time.sleep(0.05)
+    args = args_file.read_text(encoding="utf-8").splitlines()
+    assert f':local/root "{tmp_path / "uml viewer"}"' in args[args.index("-Sdeps") + 1]
+    return args[args.index("uml-viewer.main.uml-viewer") + 1 :]
+
+
+def test_uml_loader_rejects_a_missing_viewer(tmp_path):
+    completed = _launch_uml(tmp_path, [], viewer="missing")
     assert completed.returncode == 1
     assert "uml-viewer checkout not found" in completed.stderr
+
+
+def test_uml_loader_prints_its_usage(tmp_path):
+    completed = _launch_uml(tmp_path, ["--help"])
+    assert completed.returncode == 0
+    assert completed.stderr.startswith("usage: ./uml [--restart]\n")
+
+
+@pytest.mark.parametrize(
+    ("examples", "chosen"),
+    [
+        (["a.edn", "my project.edn"], ["examples/my project.edn"]),
+        (["a.policy.edn", "b.edn", "c.edn"], ["examples/b.edn"]),
+        (["a.policy.edn"], []),
+        ([], []),
+        (["a\\c.edn"], ["examples/a\\c.edn"]),
+    ],
+    ids=["own-name", "skips-policy", "only-policy", "no-examples", "backslash"],
+)
+def test_uml_loader_restarts_the_viewer_on_an_example(tmp_path, examples, chosen):
+    completed = _launch_uml(tmp_path, ["--restart"], examples)
+    assert completed.returncode == 0, completed.stderr
+    assert re.fullmatch(r"UML viewer started \(pid \d+\)\. Log: uml-viewer-log\.txt\n", completed.stdout)
+    assert _viewer_args(tmp_path) == ["--restart", *chosen]
+    log = (tmp_path / "my project" / "uml-viewer-log.txt").read_text(encoding="utf-8")
+    assert log.splitlines()[0].endswith(" ".join(["starting uml-viewer --restart", *chosen]))
+
+
+def test_uml_loader_passes_other_arguments_to_the_viewer(tmp_path):
+    completed = _launch_uml(tmp_path, ["diagram.edn", "two words"])
+    assert completed.returncode == 0, completed.stderr
+    assert _viewer_args(tmp_path) == ["diagram.edn", "two words"]
 
 
 def test_main_exits_with_the_status(monkeypatch):
