@@ -18,7 +18,7 @@ scratch_root() {
 usage() {
   cat <<USAGE
 usage: verify-crapper doctor
-       verify-crapper project typescript | typescript-failing | rust | rust-split | rust-untested | <git repo>
+       verify-crapper project typescript | typescript-failing | rust | rust-split | rust-untested | languages | <git repo>
        verify-crapper stale <project> <report path> <source path>
        verify-crapper drive [--path <PATH>] <project> <transcript> [crapper args...]
        verify-crapper exec <project> <transcript> <command> [args...]
@@ -91,6 +91,19 @@ mod tests {
     }
 }
 "
+
+# languages: one function in each tree-sitter language (Python, Rust, Go,
+# TypeScript, Java), so a run parses each grammar crapper takes from the language pack.
+write_languages() {
+  local project=$1
+  mkdir -p "$project"
+  printf 'def a(x):\n    return f(x) + 1\n' >"$project/p.py"
+  printf 'fn a(x: i32) -> i32 { f(x) + 1 }\n' >"$project/r.rs"
+  printf 'package p\nfunc A(x int) int { return f(x) + 1 }\n' >"$project/g.go"
+  printf 'function a(x) { return f(x) + 1; }\n' >"$project/t.ts"
+  printf 'class J {\n  int a(int x) { return f(x) + 1; }\n}\n' >"$project/J.java"
+  commit_fixture "$project"
+}
 
 # Lists the coverage reports crapper can read, with their modification times.
 reports() {
@@ -167,6 +180,7 @@ case "${1:-}" in
       rust) write_cargo_package "$scratch/project" "$rust_lib_rust" ;;
       rust-split) write_cargo_package "$scratch/project" "$rust_lib_split" ;;
       rust-untested) write_cargo_package "$scratch/project" "$rust_lib_untested" ;;
+      languages) write_languages "$scratch/project" ;;
       *) git clone -q -- "$2" "$scratch/project" ;;
     esac
     echo "$scratch/project"
