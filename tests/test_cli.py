@@ -621,6 +621,15 @@ _PY_ROOT_TESTS = "[tool.pytest.ini_options]\ntestpaths = ['.']\n"
             {"tick": 100.0, "tock": 50.0},
             id="package",
         ),
+        pytest.param(
+            {
+                "pyproject.toml": "[tool.pytest.ini_options]\npythonpath = ['a,b']\n",
+                "a,b/demo.py": _PY_CLOCK,
+                "tests/test_demo.py": "from demo import tick" + _PY_TEST_TICK,
+            },
+            {"tick": 100.0, "tock": 50.0},
+            id="comma-folder",
+        ),
     ],
 )
 def test_a_default_run_measures_python_in_each_layout(tmp_path, monkeypatch, project, want):
