@@ -17,7 +17,7 @@ Run every `$vc` command through skillflow's `bin/sandbox` when a caller asks for
 
 ## Launch
 
-There is no server and no build. `./crapper` creates `.venv` on first use. In a git worktree, create the worktree's own `.venv` (`python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'`); never point it at another checkout's `.venv`, which imports that checkout's source.
+There is no server and no build. Run `$vc doctor` first: when it prints `doctor: ok`, `.venv` is already set up, so skip the install, which needs the network. `./crapper` creates `.venv` on first use. In a git worktree, create the worktree's own `.venv` (`python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'`); never point it at another checkout's `.venv`, which imports that checkout's source.
 
 It is ready when `$vc doctor` prints `doctor: ok`. Teardown is `$vc cleanup <project>` for each scratch project you made.
 
