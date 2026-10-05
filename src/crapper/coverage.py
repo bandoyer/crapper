@@ -2,7 +2,8 @@
 
 Clojure prefers Cloverage's per-line form counts, then LCOV. Java uses JaCoCo
 instruction counters. Go uses statement profiles. LCOV scores a function by
-its BRDA branch records when it has any, and by line hits otherwise.
+its BRDA branch records when it has any, and by line hits otherwise. LCOV
+records for the same file, in one report or several, combine into one.
 `percent_for` returns None when the file is absent; analysis turns that into 0%.
 """
 
@@ -28,13 +29,27 @@ class FileCoverage(dict):
     """Line hits for one file, plus branch hits keyed by line.
 
     The mapping itself is `line → (covered, total)` from `DA` records, so
-    existing callers can keep indexing it. `branches` aggregates each `BRDA`
-    record on that line as one branch.
+    existing callers can keep indexing it. `branches` counts the distinct
+    `BRDA` branches on each line, `(taken, total)`.
+
+    Every record for the file adds to the same object: a line is hit when any
+    record hits it, and a branch, identified by `(line, block, branch)`, is
+    taken when any record took it.
     """
 
     def __init__(self):
         super().__init__()
         self.branches: dict[int, tuple[int, int]] = {}
+        self._arms: dict[int, dict[tuple[str, str], bool]] = {}
+
+    def add_line(self, line: int, hit: bool) -> None:
+        covered = self.get(line, (0,))[0]
+        self[line] = (max(covered, int(hit)), 1)
+
+    def add_branch(self, line: int, block: str, branch: str, taken: bool) -> None:
+        arms = self._arms.setdefault(line, {})
+        arms[(block, branch)] = arms.get((block, branch), False) or taken
+        self.branches[line] = (sum(arms.values()), len(arms))
 
 
 def normalize_path(path: str) -> str:
@@ -237,44 +252,31 @@ def _branch_hit(taken: str) -> bool:
         return False
 
 
-def _add_branch(record: FileCoverage, line: int, taken: str) -> None:
-    covered, total = record.branches.get(line, (0, 0))
-    record.branches[line] = (covered + (1 if _branch_hit(taken) else 0), total + 1)
-
-
-def _store_lcov(out: dict[str, FileCoverage], current_file: str | None, current: FileCoverage) -> None:
-    if current_file is not None:
-        out[current_file] = current
-
-
 def _read_lcov_line(current: FileCoverage, line: str) -> None:
     match = _LCOV_DA.match(line)
     if match:
-        hits = int(match.group(2))
-        current[int(match.group(1))] = (1 if hits > 0 else 0, 1)
+        current.add_line(int(match.group(1)), int(match.group(2)) > 0)
         return
     branch = _LCOV_BRDA.match(line)
     if branch:
-        _add_branch(current, int(branch.group(1)), branch.group(4))
+        current.add_branch(
+            int(branch.group(1)), branch.group(2), branch.group(3), _branch_hit(branch.group(4))
+        )
 
 
 def parse_lcov(text: str) -> dict[str, FileCoverage]:
+    """Coverage per `SF:` path. A path's repeated records combine (see FileCoverage)."""
+
     out: dict[str, FileCoverage] = {}
-    current_file = None
-    current = FileCoverage()
+    current = None
     for raw in text.splitlines():
         line = raw.strip()
         if line.startswith("SF:"):
-            _store_lcov(out, current_file, current)
-            current_file = line[3:]
-            current = FileCoverage()
+            current = out.setdefault(line[3:], FileCoverage())
         elif line == "end_of_record":
-            _store_lcov(out, current_file, current)
-            current_file = None
-            current = FileCoverage()
-        elif current_file is not None:
+            current = None
+        elif current is not None:
             _read_lcov_line(current, line)
-    _store_lcov(out, current_file, current)
     return out
 
 
@@ -510,11 +512,10 @@ def _merge_texts(paths: list[Path]) -> list[str]:
     return texts
 
 
-def _merge_lcov(root: Path) -> dict[str, dict[int, tuple[int, int]]]:
-    merged: dict[str, dict[int, tuple[int, int]]] = {}
-    for text in _merge_texts(_lcov_paths(root)):
-        merged.update(parse_lcov(text))
-    return merged
+def _merge_lcov(root: Path) -> dict[str, FileCoverage]:
+    """Every report read as one, so a file named in two reports combines like a repeated record."""
+
+    return parse_lcov("\n".join(_merge_texts(_lcov_paths(root))))
 
 
 def _merge_go(root: Path) -> dict[str, list[tuple[int, int, int, int]]]:

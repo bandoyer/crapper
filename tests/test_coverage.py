@@ -158,3 +158,16 @@ def test_load_bundle_merges_each_report(tmp_path):
     assert bundle.percent_for(function(start_line=3, end_line=4)) == 50.0
     assert bundle.go_profile is not None
     assert bundle.jacoco is not None
+
+
+def test_combined_records_keep_the_line_and_branch_shapes(tmp_path):
+    report = tmp_path / "coverage" / "lcov.info"
+    report.parent.mkdir(parents=True)
+    report.write_text(
+        "SF:src/app.ts\nDA:2,1\nDA:3,0\nBRDA:3,0,0,1\nBRDA:3,0,1,0\nend_of_record\n"
+        "SF:src/app.ts\nDA:2,0\nDA:3,4\nBRDA:3,0,0,0\nBRDA:3,0,1,2\nend_of_record\n",
+        encoding="utf-8",
+    )
+    record = load_bundle(tmp_path).lcov["src/app.ts"]
+    assert dict(record) == {2: (1, 1), 3: (1, 1)}
+    assert record.branches == {3: (2, 2)}

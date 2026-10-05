@@ -84,6 +84,8 @@ By default a run deletes the previous report for each language it is about to me
 
 A missing tool or a failed test run scores that language at 0% and still writes the snapshot. Pass `--coverage-command` to replace those defaults with one command of your own. `--no-coverage` is the run that leaves coverage and CRAP as N/A.
 
+LCOV records that name the same source path combine, whether they sit in one report or in several. A line counts as hit when any record hits it. A branch (`BRDA` line, block, and branch) counts as taken when any record took it. So a command that writes unit-test and integration-test coverage as two `lcov.info` files under `target/coverage/rust/` scores the union of both.
+
 ## Development
 
 ```bash
