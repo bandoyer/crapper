@@ -167,13 +167,14 @@ def _path_attribute(data: bytes, node) -> str | None:
 
 
 def _declarations(data: bytes, tree):
-    """Each `mod x;` in a parsed file (a `mod` with no body here), with its name."""
+    """Each `mod x;` in a parsed file (a `mod` with no body here), with its name
+    as a file name: `mod r#type;` loads `type.rs`."""
 
     for node in descendants(tree.root_node):
         if node.type == "mod_item" and child_of_type(node, "declaration_list") is None:
             ident = child_of_type(node, "identifier")
             if ident is not None:
-                yield node, node_text(data, ident)
+                yield node, node_text(data, ident).removeprefix("r#")
 
 
 def _module_files(module: Path, folder: Path):
@@ -181,24 +182,26 @@ def _module_files(module: Path, folder: Path):
     folder where that file's own declarations resolve, and whether the
     declaration is test code. `folder` is where this file's declarations
     resolve: beside a crate root, `mod.rs`, or `#[path]` file, and under
-    `a/x/` for a plain module file `a/x.rs`."""
+    `a/x/` for a plain module file `a/x.rs`. Only a regular file is yielded,
+    so the walk never reads a FIFO or a device a `#[path]` names."""
 
     try:
         data, tree = parse(module.read_text(encoding="utf-8", errors="replace"), "rust")
     except OSError:
         return
     for node, name in _declarations(data, tree):
-        inline = _ancestor_mods(data, node)
+        inline = [part.removeprefix("r#") for part in _ancestor_mods(data, node)]
         base = folder.joinpath(*inline)
         test = name == "tests" or _is_test_item(data, node)
         path = _path_attribute(data, node)
         if path is not None:
             loaded = ((base if inline else module.parent) / path).resolve()
-            yield loaded, loaded.parent, test
-            continue
-        for loaded in (base / f"{name}.rs", base / name / "mod.rs"):
+            candidates = [(loaded, loaded.parent)]
+        else:
+            candidates = [(base / f"{name}.rs", base / name), (base / name / "mod.rs", base / name)]
+        for loaded, below in candidates:
             if loaded.is_file():
-                yield loaded.resolve(), (base / name).resolve(), test
+                yield loaded.resolve(), below.resolve(), test
                 break
 
 

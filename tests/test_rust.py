@@ -1,5 +1,7 @@
 import inspect
+import os
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -367,6 +369,18 @@ CARGO = '[package]\nname = "edges"\nversion = "0.1.0"\n'
             id="a #[path] out of a plain module's folder is not followed",
         ),
         pytest.param(
+            {"src/lib.rs": "#[cfg(test)]\nmod r#type;\n", "src/type.rs": "fn hidden() {}\n"},
+            "src/type.rs",
+            [],
+            id="a raw-identifier module name",
+        ),
+        pytest.param(
+            {"src/lib.rs": "#[cfg(test)]\nmod r#async {\n    mod leaf;\n}\n", "src/async/leaf.rs": "fn hidden() {}\n"},
+            "src/async/leaf.rs",
+            [],
+            id="a raw-identifier inline module",
+        ),
+        pytest.param(
             {"src/lib.rs": "#[cfg(test)]\nmod helpers {\n    fn inside() {}\n}\n", "src/helpers.rs": "pub fn kept() {}\n"},
             "src/helpers.rs",
             ["kept"],
@@ -402,3 +416,29 @@ def test_the_module_walk_does_not_deepen_the_stack_per_module(tmp_path):
     finally:
         sys.setrecursionlimit(limit)
     assert listed == []
+
+
+def test_a_path_that_names_no_regular_file_is_not_opened(tmp_path):
+    """A `#[path]` to a FIFO would block the walk's read forever."""
+
+    crate = _write_crate(
+        tmp_path / "pipes",
+        {"Cargo.toml": CARGO, "src/lib.rs": '#[cfg(test)]\n#[path = "pipe"]\nmod piped;\n', "src/other.rs": "pub fn kept() {}\n"},
+    )
+    os.mkfifo(crate / "src" / "pipe")
+    listed = []
+    walk = threading.Thread(target=lambda: listed.extend(_listed(crate, "src/other.rs", "crapper")), daemon=True)
+    walk.start()
+    walk.join(10)
+    assert listed == ["kept"]
+
+
+def test_an_unreadable_module_file_ends_its_branch_of_the_walk(tmp_path):
+    crate = _write_crate(
+        tmp_path / "locked",
+        {"Cargo.toml": CARGO, "src/lib.rs": "pub mod outer;\n", "src/outer.rs": "#[cfg(test)]\nmod inner;\n", "src/outer/inner.rs": "pub fn kept() {}\n"},
+    )
+    (crate / "src" / "outer.rs").chmod(0)
+    if os.access(crate / "src" / "outer.rs", os.R_OK):
+        pytest.skip("this user can read a file with mode 0")
+    assert _listed(crate, "src/outer/inner.rs", "crapper") == ["kept"]
