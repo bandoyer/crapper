@@ -24,7 +24,7 @@ This folder is the maintained source for verifying what a crapper user sees. Rea
 
 ## Features
 
-- [Score with fresh coverage](./coverage-run.md) covers a default run: it measures coverage, clears an earlier run's reports first, reads only the reports its collectors wrote, scores a language 0% when its collection wrote nothing, and measures a Python file at the project root.
+- [Score with fresh coverage](./coverage-run.md) covers a default run: it measures coverage, clears an earlier run's reports first, reads only the reports its collectors wrote, scores a language 0% when its collection wrote nothing, warns when a failed run's report is still read, and measures a Python file at the project root.
 - [Score with a custom coverage command](./coverage-command.md) covers `--coverage-command`: crapper runs the given command, then reads the reports on disk, combining reports that name the same file.
 - [Score with existing coverage](./existing-coverage.md) covers `--use-existing-coverage`: it reads the reports already on disk, runs no coverage command, and deletes nothing.
 - [Complexity only](./no-coverage.md) covers `--no-coverage`: coverage and CRAP are `N/A`.
