@@ -18,7 +18,7 @@ scratch_root() {
 usage() {
   cat <<USAGE
 usage: verify-crapper doctor
-       verify-crapper project typescript | typescript-failing | rust | rust-split | rust-untested | rust-workspace | rust-siblings | rust-test-fns | rust-test-macros | python-flat | python-mixed | languages | <git repo>
+       verify-crapper project typescript | typescript-failing | rust | rust-split | rust-untested | rust-workspace | rust-siblings | rust-test-fns | rust-test-macros | rust-test-modules | python-flat | python-mixed | languages | <git repo>
        verify-crapper stale <project> <report path> <source path>
        verify-crapper drive [--path <PATH>] <project> <transcript> [crapper args...]
        verify-crapper exec <project> <transcript> <command> [args...]
@@ -91,6 +91,83 @@ write_workspace() {
   commit_fixture "$project"
 }
 
+# rust-test-modules: crapper skips the functions in checks.rs, checks/deeper.rs,
+# fixtures/mod.rs, outer/inner.rs, inline/leaf.rs, support/helpers.rs
+# (#[path]), gated.rs, tests.rs (a bare `mod tests;`), and cli_checks.rs
+# (declared in main.rs). It scores tick, main, outer_fn, util_fn, real_fn,
+# shared_fn (lib.rs declares it test-only, main.rs plainly), and orphan_fn
+# (declared nowhere). It compiles, so a default run measures coverage.
+write_modules() {
+  local project=$1 file
+  write_crate "$project" tree 'pub fn tick() -> i32 {
+    1
+}
+
+pub mod outer;
+mod util;
+
+#[cfg(test)]
+mod checks;
+
+#[cfg(test)]
+mod fixtures;
+
+#[cfg(test)]
+mod inline {
+    mod leaf;
+}
+
+#[cfg(test)]
+#[path = "support/helpers.rs"]
+mod helpers;
+
+#[cfg(all(test, feature = "x"))]
+mod gated;
+
+mod tests;
+
+#[cfg(not(test))]
+mod real;
+
+#[cfg(test)]
+mod shared;
+' tick $'\n[features]\nx = []\n'
+  printf '%s' 'fn main() {
+    println!("{}", tree::tick());
+}
+
+mod shared;
+
+#[cfg(test)]
+mod cli_checks;
+' >"$project/src/main.rs"
+  printf '%s' 'mod deeper;
+
+fn checks_sample() -> i32 {
+    super::tick()
+}
+
+#[test]
+fn checks_test() {
+    assert_eq!(checks_sample(), 1);
+}
+' >"$project/src/checks.rs"
+  printf '%s' 'pub fn outer_fn() -> i32 {
+    4
+}
+
+#[cfg(test)]
+mod inner;
+' >"$project/src/outer.rs"
+  for file in checks/deeper:deeper_probe fixtures/mod:fixtures_probe outer/inner:inner_probe \
+    inline/leaf:leaf_probe support/helpers:helpers_probe gated:gated_probe tests:tests_probe \
+    cli_checks:cli_probe util:util_fn real:real_fn shared:shared_fn orphan:orphan_fn; do
+    mkdir -p "$(dirname "$project/src/${file%%:*}.rs")"
+    printf 'pub fn %s() -> i32 {\n    2\n}\n' "${file#*:}" >"$project/src/${file%%:*}.rs"
+  done
+  commit_fixture "$project"
+}
+
 # rust: one function, `tick`, on line 1 of src/lib.rs, so it is the only scored function.
 # rust-split: `tick` and `tock`. Only a unit test (in src/lib.rs's `mod tests`,
 #   which crapper skips) calls `tock`, so `cargo llvm-cov --lib` and
@@ -100,8 +177,14 @@ write_workspace() {
 #   stacked #[test], #[cfg(test)] on a function, a mod, and an impl, and
 #   #[cfg(all(test, feature = "x"))]), and non-test controls it scores.
 # rust-test-macros: test attributes from crates the fixture doesn't have
-#   (#[tokio::test], #[rstest]) and a #[testing::helper] control. It doesn't
-#   compile, so drive it with --no-coverage.
+#   (#[tokio::test], #[rstest], #[test_case], #[test_matrix], #[proptest],
+#   #[property_test], #[wasm_bindgen_test], #[quickcheck], and path forms), a
+#   function in a proptest! body, and controls (#[testing::helper],
+#   #[wasm_bindgen], #[test_cases], #[quickcheck_helper]). It doesn't compile,
+#   so drive it with --no-coverage.
+# rust-test-modules: the package tree, with src/lib.rs and src/main.rs, whose
+#   test-only modules are declared with `mod x;` and kept in their own files
+#   (write_modules lists them), and production modules crapper still scores.
 rust_lib_rust='pub fn tick() -> i32 { 1 }
 '
 rust_lib_untested='pub fn tick() -> i32 {
@@ -189,6 +272,73 @@ fn cases() {
 #[testing::helper]
 pub fn assisted() -> i32 {
     4
+}
+
+#[test_case(1)]
+fn cased(n: i32) {
+    assert_eq!(tick(), n);
+}
+
+#[test_case::test_case(2)]
+fn cased_path(n: i32) {
+    assert_eq!(tick() + 1, n);
+}
+
+#[test_matrix([1, 2])]
+fn matrixed(n: i32) {
+    assert!(tick() <= n);
+}
+
+#[proptest]
+fn proped(n: u8) {
+    assert!(tick() <= i32::from(n) + 1);
+}
+
+#[property_test]
+fn property(n: u8) {
+    assert!(tick() <= i32::from(n) + 1);
+}
+
+#[wasm_bindgen_test]
+fn in_browser() {
+    assert_eq!(tick(), 1);
+}
+
+#[wasm_bindgen_test::wasm_bindgen_test]
+fn in_browser_path() {
+    assert_eq!(tick(), 1);
+}
+
+#[quickcheck]
+fn checked(n: u8) -> bool {
+    tick() <= i32::from(n) + 1
+}
+
+#[quickcheck_macros::quickcheck]
+fn checked_path(n: u8) -> bool {
+    tick() <= i32::from(n) + 1
+}
+
+proptest! {
+    #[test]
+    fn in_proptest_body(n in 0..10u8) {
+        assert!(tick() <= i32::from(n) + 1);
+    }
+}
+
+#[wasm_bindgen]
+pub fn greet() -> i32 {
+    tick()
+}
+
+#[test_cases]
+pub fn plural() -> i32 {
+    6
+}
+
+#[quickcheck_helper]
+pub fn aided() -> i32 {
+    7
 }
 "
 rust_lib_split="${rust_lib_untested}
@@ -332,6 +482,7 @@ case "${1:-}" in
         write_crate "$scratch/project" clock "$rust_lib_test_fns" tick $'\n[features]\nx = []\n'
         commit_fixture "$scratch/project" ;;
       rust-test-macros) write_cargo_package "$scratch/project" "$rust_lib_test_macros" ;;
+      rust-test-modules) write_modules "$scratch/project" ;;
       python-flat) write_python "$scratch/project" no ;;
       python-mixed) write_python "$scratch/project" yes ;;
       languages) write_languages "$scratch/project" ;;

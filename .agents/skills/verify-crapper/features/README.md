@@ -31,5 +31,5 @@ This folder is the maintained source for verifying what a crapper user sees. Rea
 - [Threshold](./threshold.md) covers `--threshold`: exit 2 when the worst score is above it, and a usage error when the threshold is not a finite number.
 - [A run with no source files](./empty-run.md) covers a full scan, a filter, or `--changed` that selects nothing: the snapshot becomes `{:entries []}`, and a failed run keeps it.
 - [Install with the lowest dependencies](./install-minimum.md) covers running crapper with every direct dependency at the lowest version `pyproject.toml` allows.
-- [Rust test code is not scored](./test-code.md) covers Rust functions with a test attribute, or inside `#[cfg(test)]` code: they get no row.
+- [Rust test code is not scored](./test-code.md) covers Rust functions with a test attribute, or inside `#[cfg(test)]` code, including a test-only module whose body is in its own file: they get no row.
 - [The uml launcher](./uml-launcher.md) covers `./uml`: it runs with no zsh, reports a missing viewer, and hands the viewer the right example diagram and arguments.
