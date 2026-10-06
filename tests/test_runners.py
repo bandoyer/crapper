@@ -693,7 +693,7 @@ def test_every_typescript_report_of_a_failed_run_carries_its_status(tmp_path, mo
     reports, report = _collect(tmp_path, "TypeScript")
     nested = tmp_path.resolve() / "coverage" / "unit" / "lcov.info"
     assert sorted((item.path.resolve(), item.code) for item in reports) == [(report, 2), (nested, 2)]
-    assert f"but wrote {report}, {nested}." in capsys.readouterr().err
+    assert f"but wrote {report} and 1 more." in capsys.readouterr().err
 
 
 def test_a_report_built_without_a_status_has_status_0(tmp_path):
@@ -750,3 +750,49 @@ def test_what_a_failed_run_left_at_its_report_path(tmp_path, monkeypatch, capsys
     else:
         assert reports == []
         assert "Go coverage will score 0%." in err
+
+
+_FORMS = "<html><span>1 out of 1 forms covered</span></html>\n"
+
+
+def _clojure_attempts(monkeypatch, first: tuple[int, list[str]], retry: tuple[int, list[str]]) -> None:
+    """`clj -M:cov --lcov` writes `first`'s files and exits with its status; `clj -M:cov` does the same with `retry`."""
+
+    def shell(command, cwd):
+        code, files = first if "--lcov" in command else retry
+        for relative in files:
+            _write(cwd, relative, _FORMS if relative.endswith(".html") else "SF:x\nend_of_record\n")
+        return code
+
+    monkeypatch.setattr("crapper.runners.run_shell", shell)
+
+
+def test_a_clojure_retry_never_labels_the_first_attempts_reports(tmp_path, monkeypatch):
+    """Review: a first attempt that wrote reports and failed, then a retry that wrote nothing and exited 0."""
+
+    written = ["target/coverage/lcov.info", "target/coverage/demo/core.html"]
+    _clojure_attempts(monkeypatch, (1, written), (0, []))
+    reports, _report = _collect(tmp_path, "Clojure")
+    assert reports == []
+
+
+def test_cloverage_html_from_a_failed_run_comes_back_with_its_status(tmp_path, monkeypatch, capsys):
+    """Review: Cloverage's HTML, which the loader prefers to LCOV, is a report of the run too."""
+
+    _clojure_attempts(monkeypatch, (1, []), (2, ["target/coverage/index.html", "target/coverage/demo/core.html"]))
+    reports, _report = _collect(tmp_path, "Clojure")
+    coverage = tmp_path.resolve() / "target" / "coverage"
+    assert sorted((item.path, item.code) for item in reports) == [
+        (coverage / "demo" / "core.html", 2),
+        (coverage / "index.html", 2),
+    ]
+    err = capsys.readouterr().err
+    assert f"Clojure coverage exited 2 in {tmp_path.resolve()}, but wrote {coverage / 'demo' / 'core.html'} and 1 more." in err
+    assert "will score 0%" not in err
+
+
+def test_cloverage_html_in_another_languages_folder_is_not_clojures(tmp_path, monkeypatch):
+    _write(tmp_path, "target/coverage/rust/html/index.html", "<html></html>\n")
+    _clojure_attempts(monkeypatch, (0, ["target/coverage/lcov.info"]), (0, []))
+    reports, report = _collect(tmp_path, "Clojure")
+    assert [(item.path, item.code) for item in reports] == [(report, 0)]

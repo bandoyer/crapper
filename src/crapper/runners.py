@@ -40,8 +40,9 @@ def _ran(language: str, module: Path, code: int, paths: list[Path]) -> list[Repo
     if code != 0:
         written = [str(path) for path in paths if path.is_file()]
         if written:
+            more = f" and {len(written) - 1} more" if len(written) > 1 else ""
             _warn(
-                f"{language} coverage exited {code} in {module}, but wrote {', '.join(written)}. "
+                f"{language} coverage exited {code} in {module}, but wrote {written[0]}{more}. "
                 "That coverage is read, and may miss lines the failed run never reached."
             )
         else:
@@ -101,10 +102,14 @@ def _outside_language_dirs(coverage: Path, path: Path) -> bool:
     return not _COVERAGE_DIRS.intersection(relative.parts)
 
 
+def _cloverage_html(coverage: Path) -> list[Path]:
+    """Cloverage's HTML under `coverage`, outside the other languages' folders."""
+
+    return sorted(path for path in coverage.rglob("*.html") if _outside_language_dirs(coverage, path))
+
+
 def _remove_cloverage_html(coverage: Path) -> None:
-    for path in coverage.rglob("*.html"):
-        if not _outside_language_dirs(coverage, path):
-            continue
+    for path in _cloverage_html(coverage):
         path.unlink()
 
 
@@ -452,8 +457,10 @@ def _cover_clojure(root: Path) -> list[Report]:
     code = run_shell(["clj", "-M:cov", "--lcov"], root)
     if code != 0:
         _warn("clj -M:cov --lcov failed; retrying without --lcov.")
+        _clean_clojure(root)
         code = run_shell(["clj", "-M:cov"], root)
-    return _ran("Clojure", root, code, [root / "target" / "coverage" / "lcov.info"])
+    coverage = root / "target" / "coverage"
+    return _ran("Clojure", root, code, [coverage / "lcov.info", *_cloverage_html(coverage)])
 
 
 def _cover_java(root: Path, files: list[Path]) -> list[Report]:
