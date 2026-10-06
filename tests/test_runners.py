@@ -1,8 +1,11 @@
 import json
+import shlex
+import sys
 from pathlib import Path
 
 import pytest
 
+from crapper.coverage import Report
 from crapper.discover import is_test_file
 from crapper.runners import (
     PackageJsonError,
@@ -19,6 +22,7 @@ from crapper.runners import (
     _restore_manifests,
     _rust_kind,
     _vitest_version,
+    collect_coverage,
     python_coverage_commands,
     python_roots,
     python_sources,
@@ -409,19 +413,25 @@ def test_missing_python_module_is_installed(tmp_path, monkeypatch):
     assert commands == ["probe"]
 
 
-def test_python_lcov_warnings(tmp_path, monkeypatch, capsys):
+def test_python_lcov_returns_the_status_its_report_carries(tmp_path, monkeypatch, capsys):
+    """The tests' status, or else `coverage lcov`'s; `coverage lcov` runs only on recorded data."""
+
     data = tmp_path / ".coverage"
-    monkeypatch.setattr("crapper.runners.run_shell", lambda *_args: 1)
-    _record_python_lcov(tmp_path, 1, data, "lcov")
-    assert "Python coverage exited 1" in capsys.readouterr().err
-    _record_python_lcov(tmp_path, 0, data, "lcov")
+    lcov_runs = []
+    monkeypatch.setattr("crapper.runners.run_shell", lambda *_args: lcov_runs.append(1) or 1)
+    assert _record_python_lcov(tmp_path, 4, data, "lcov") == 4
+    assert _record_python_lcov(tmp_path, 0, data, "lcov") == 0
+    assert lcov_runs == []
     assert capsys.readouterr().err == ""
     data.write_text("x", encoding="utf-8")
-    _record_python_lcov(tmp_path, 0, data, "lcov")
+    assert _record_python_lcov(tmp_path, 0, data, "lcov") == 1
+    assert f"coverage lcov exited 1 in {tmp_path}." in capsys.readouterr().err
+    assert _record_python_lcov(tmp_path, 4, data, "lcov") == 4
     assert "coverage lcov exited 1" in capsys.readouterr().err
     monkeypatch.setattr("crapper.runners.run_shell", lambda *_args: 0)
-    _record_python_lcov(tmp_path, 7, data, "lcov")
-    assert "Coverage was still recorded" in capsys.readouterr().err
+    assert _record_python_lcov(tmp_path, 7, data, "lcov") == 7
+    assert _record_python_lcov(tmp_path, 0, data, "lcov") == 0
+    assert capsys.readouterr().err == ""
 
 
 def test_custom_coverage_command_failure_is_reported(tmp_path, capsys):
@@ -551,3 +561,192 @@ def test_run_coverage_without_a_command_still_returns_zero(tmp_path, monkeypatch
     _write(tmp_path, "go.mod", "module demo\n")
     source = _write(tmp_path, "main.go", "package main\n")
     assert run_coverage(tmp_path, [source], None) == 0
+
+
+# One project per collector: its files, the source to analyze, and the report its run writes.
+_COLLECTORS = {
+    "Clojure": ({"deps.edn": "{}\n", "src/demo/core.clj": "(ns demo.core)\n(defn x [] 1)\n"},
+                "src/demo/core.clj", "target/coverage/lcov.info"),
+    "Java": ({"pom.xml": "<project></project>\n", "src/Board.java": "class Board { int place() { return 1; } }\n"},
+             "src/Board.java", "target/site/jacoco/jacoco.xml"),
+    "Go": ({"go.mod": "module example.com/demo\n", "board.go": "package demo\nfunc Place() int { return 1 }\n"},
+           "board.go", "target/coverage/go/coverage.out"),
+    "TypeScript": ({"package.json": '{"scripts": {"coverage": "sh coverage.sh"}}\n',
+                    "src/clock.ts": "export function tick(): number { return 1 }\n"},
+                   "src/clock.ts", "coverage/lcov.info"),
+    "Python": ({"pyproject.toml": "[tool.pytest.ini_options]\n", "demo.py": "def tick():\n    return True\n"},
+               "demo.py", "target/coverage/python/lcov.info"),
+    "Rust": ({"Cargo.toml": '[package]\nname = "clock"\nversion = "0.1.0"\n', "src/lib.rs": "pub fn tick() {}\n"},
+             "src/lib.rs", "target/coverage/rust/lcov.info"),
+}
+
+
+def _report_written_by(command, cwd: Path) -> Path | None:
+    """Where each collector's coverage command writes its report, or None for a probe or an install."""
+
+    args = command if isinstance(command, list) else command.split()
+    text = " ".join(args)
+    for arg in args:
+        if arg.startswith("-coverprofile="):
+            return Path(arg.split("=", 1)[1])
+        if arg.startswith("--data-file=") and "coverage run" in text:
+            return Path(arg.split("=", 1)[1])
+    if "--output-path" in args:
+        return Path(args[args.index("--output-path") + 1])
+    if "coverage lcov" in text:
+        return Path(args[args.index("-o") + 1])
+    folders = {"npm": "coverage/lcov.info", "mvn": "target/site/jacoco/jacoco.xml", "clj": "target/coverage/lcov.info"}
+    return cwd / folders[args[0]] if args[0] in folders else None
+
+
+def _fake_tools(monkeypatch, code: int, write: bool) -> None:
+    """Each coverage command writes its report when `write`, then exits `code`; the rest exit 0."""
+
+    def shell(command, cwd):
+        report = _report_written_by(command, cwd)
+        if report is None:
+            return 0
+        if write:
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.write_text("SF:x\nend_of_record\n", encoding="utf-8")
+        return 0 if "coverage lcov" in " ".join(command) else code
+
+    monkeypatch.setattr("crapper.runners.run_shell", shell)
+    monkeypatch.setattr(
+        "crapper.runners.shutil.which",
+        lambda name: "/bin/cargo-llvm-cov" if name == "cargo-llvm-cov" else None,
+    )
+
+
+def _collect(tmp_path: Path, language: str) -> tuple[list[Report], Path]:
+    files, source, report = _COLLECTORS[language]
+    for relative, text in files.items():
+        _write(tmp_path, relative, text)
+    return collect_coverage(tmp_path, [tmp_path / source]), tmp_path.resolve() / report
+
+
+@pytest.mark.parametrize("language", list(_COLLECTORS))
+def test_a_failed_run_that_wrote_a_report_returns_it_with_its_status(tmp_path, monkeypatch, capsys, language):
+    """#55: mutator reads the reports `collect_coverage` returns, so a failed run's report must say so."""
+
+    _fake_tools(monkeypatch, 3, write=True)
+    reports, report = _collect(tmp_path, language)
+    assert [(item.path.resolve(), item.code) for item in reports] == [(report, 3)]
+    warnings = capsys.readouterr().err.splitlines()
+    assert any(
+        line.startswith(f"{language} coverage exited 3 in ") and f", but wrote {report}. That coverage is read" in line
+        for line in warnings
+    ), warnings
+    assert not any("will score 0%" in line for line in warnings)
+
+
+@pytest.mark.parametrize("language", list(_COLLECTORS))
+def test_a_run_that_succeeded_returns_its_report_with_status_0(tmp_path, monkeypatch, capsys, language):
+    _fake_tools(monkeypatch, 0, write=True)
+    reports, report = _collect(tmp_path, language)
+    assert [(item.path.resolve(), item.code) for item in reports] == [(report, 0)]
+    assert "exited" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("language", list(_COLLECTORS))
+def test_a_failed_run_that_wrote_nothing_returns_no_report(tmp_path, monkeypatch, capsys, language):
+    _fake_tools(monkeypatch, 3, write=False)
+    reports, _report = _collect(tmp_path, language)
+    assert reports == []
+    assert f"{language} coverage exited 3 in {tmp_path.resolve()}. {language} coverage will score 0%." in (
+        capsys.readouterr().err
+    )
+
+
+@pytest.mark.parametrize("code", [1, 255, -9])
+def test_any_non_zero_status_is_a_failed_run(tmp_path, monkeypatch, capsys, code):
+    """A status from 1 up, or a negative one from a signal, is kept as the run gave it."""
+
+    _fake_tools(monkeypatch, code, write=True)
+    reports, report = _collect(tmp_path, "Go")
+    assert [(item.path.resolve(), item.code) for item in reports] == [(report, code)]
+    assert f"Go coverage exited {code} in " in capsys.readouterr().err
+
+
+def test_a_clojure_retry_that_succeeds_returns_status_0(tmp_path, monkeypatch, capsys):
+    def shell(command, cwd):
+        if "--lcov" in command:
+            return 3
+        _write(cwd, "target/coverage/lcov.info", "SF:x\nend_of_record\n")
+        return 0
+
+    monkeypatch.setattr("crapper.runners.run_shell", shell)
+    reports, report = _collect(tmp_path, "Clojure")
+    assert [(item.path.resolve(), item.code) for item in reports] == [(report, 0)]
+    assert "Clojure coverage exited" not in capsys.readouterr().err
+
+
+def test_every_typescript_report_of_a_failed_run_carries_its_status(tmp_path, monkeypatch, capsys):
+    """A package's own script can write several `coverage/**/lcov.info`; each is from the same run."""
+
+    def shell(command, cwd):
+        _write(cwd, "coverage/lcov.info", "SF:x\nend_of_record\n")
+        _write(cwd, "coverage/unit/lcov.info", "SF:y\nend_of_record\n")
+        return 2
+
+    monkeypatch.setattr("crapper.runners.run_shell", shell)
+    reports, report = _collect(tmp_path, "TypeScript")
+    nested = tmp_path.resolve() / "coverage" / "unit" / "lcov.info"
+    assert sorted((item.path.resolve(), item.code) for item in reports) == [(report, 2), (nested, 2)]
+    assert f"but wrote {report}, {nested}." in capsys.readouterr().err
+
+
+def test_a_report_built_without_a_status_has_status_0(tmp_path):
+    """mutator and the on-disk loader build `Report(path)` and `Report(path, module)`."""
+
+    assert Report(tmp_path / "lcov.info").code == 0
+    assert Report(tmp_path / "lcov.info", tmp_path) == (tmp_path / "lcov.info", tmp_path, 0)
+
+
+def test_the_issues_probe_returns_its_report_with_the_failed_tests_status(tmp_path, monkeypatch, capsys):
+    """#55's probe, with real coverage.py and pytest: the only test fails under coverage.py alone."""
+
+    _write(tmp_path, "pyproject.toml", "[tool.pytest.ini_options]\n")
+    _write(tmp_path, "demo.py", "def tick():\n    return True\n")
+    _write(
+        tmp_path,
+        "test_demo.py",
+        "import sys\n\nfrom demo import tick\n\n\ndef test_tick():\n"
+        '    assert "coverage" not in sys.modules, "fails only under coverage.py"\n'
+        "    assert tick() is True\n",
+    )
+    _write(tmp_path, ".venv/bin/python", f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+    (tmp_path / ".venv" / "bin" / "python").chmod(0o755)
+    reports = collect_coverage(tmp_path, [tmp_path / "demo.py"])
+    report = tmp_path.resolve() / "target" / "coverage" / "python" / "lcov.info"
+    assert [(item.path, item.code) for item in reports] == [(report, 1)]
+    assert f"Python coverage exited 1 in {tmp_path.resolve()}, but wrote {report}." in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("form", "returned"),
+    [("empty file", True), ("symlink to a report", True), ("folder", False)],
+)
+def test_what_a_failed_run_left_at_its_report_path(tmp_path, monkeypatch, capsys, form, returned):
+    """A file at the report path, even an empty one or a symlink, is returned with the status; a folder isn't."""
+
+    def shell(command, cwd):
+        profile = Path(command[-1].split("=", 1)[1])
+        if form == "empty file":
+            profile.write_text("", encoding="utf-8")
+        elif form == "symlink to a report":
+            real = _write(tmp_path, "elsewhere/coverage.out", "mode: set\n")
+            profile.symlink_to(real)
+        else:
+            profile.mkdir()
+        return 3
+
+    monkeypatch.setattr("crapper.runners.run_shell", shell)
+    reports, report = _collect(tmp_path, "Go")
+    err = capsys.readouterr().err
+    if returned:
+        assert [(item.path, item.code) for item in reports] == [(report, 3)]
+        assert f"but wrote {report}." in err
+    else:
+        assert reports == []
+        assert "Go coverage will score 0%." in err
