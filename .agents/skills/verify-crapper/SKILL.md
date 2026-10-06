@@ -34,6 +34,7 @@ It changes no project file. It fails if the launcher is missing, `./crapper --he
 ```bash
 project=$($vc project typescript)            # tick in src/clock.ts; `npm run coverage` writes coverage/lcov.info with tick covered
 project=$($vc project typescript-failing)    # same package; `npm run coverage` exits 1 and writes nothing
+project=$($vc project typescript-partial)    # same package; `npm run coverage` writes coverage/lcov.info with tick covered, then exits 1
 project=$($vc project rust)                  # tick in src/lib.rs, a Cargo package with one passing test in tests/
 project=$($vc project rust-split)            # tick and tock in src/lib.rs; a unit test calls tock, an integration test calls tick
 project=$($vc project rust-untested)         # tick and tock in src/lib.rs; an integration test calls tick, nothing calls tock
@@ -80,4 +81,4 @@ This removes only a scratch folder that `$vc project` created (`$TMPDIR/crapper-
 
 ## Helpers
 
-`bin/verify-crapper` subcommands: `doctor`, `project typescript | typescript-failing | rust | rust-split | rust-untested | rust-workspace | rust-siblings | rust-test-fns | rust-test-macros | rust-test-modules | python-flat | python-mixed | languages | <git repo>`, `stale <project> <report> <source>`, `drive [--path <PATH>] <project> <transcript> [crapper args...]`, `exec <project> <transcript> <command> [args...]`, `cleanup <project>`. Running it with no arguments prints usage.
+`bin/verify-crapper` subcommands: `doctor`, `project typescript | typescript-failing | typescript-partial | rust | rust-split | rust-untested | rust-workspace | rust-siblings | rust-test-fns | rust-test-macros | rust-test-modules | python-flat | python-mixed | languages | <git repo>`, `stale <project> <report> <source>`, `drive [--path <PATH>] <project> <transcript> [crapper args...]`, `exec <project> <transcript> <command> [args...]`, `cleanup <project>`. Running it with no arguments prints usage.

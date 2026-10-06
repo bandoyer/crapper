@@ -18,7 +18,7 @@ scratch_root() {
 usage() {
   cat <<USAGE
 usage: verify-crapper doctor
-       verify-crapper project typescript | typescript-failing | rust | rust-split | rust-untested | rust-workspace | rust-siblings | rust-test-fns | rust-test-macros | rust-test-modules | python-flat | python-mixed | languages | <git repo>
+       verify-crapper project typescript | typescript-failing | typescript-partial | rust | rust-split | rust-untested | rust-workspace | rust-siblings | rust-test-fns | rust-test-macros | rust-test-modules | python-flat | python-mixed | languages | <git repo>
        verify-crapper stale <project> <report path> <source path>
        verify-crapper drive [--path <PATH>] <project> <transcript> [crapper args...]
        verify-crapper exec <project> <transcript> <command> [args...]
@@ -43,6 +43,7 @@ commit_fixture() {
 # Its `coverage` script is `sh coverage.sh`, which needs no npm install.
 # typescript: coverage.sh writes coverage/lcov.info with line 1 hit (100%).
 # typescript-failing: coverage.sh exits 1 and writes nothing.
+# typescript-partial: coverage.sh writes that report, then exits 1 (#55).
 write_typescript() {
   local project=$1 failing=$2
   mkdir -p "$project/src"
@@ -52,6 +53,9 @@ write_typescript() {
     printf 'echo "coverage.sh: tests failed" >&2\nexit 1\n' >"$project/coverage.sh"
   else
     printf 'mkdir -p coverage\nprintf "SF:src/clock.ts\\nDA:1,1\\nLF:1\\nLH:1\\nend_of_record\\n" > coverage/lcov.info\n' >"$project/coverage.sh"
+  fi
+  if [[ $failing == partial ]]; then
+    printf 'echo "coverage.sh: tests failed" >&2\nexit 1\n' >>"$project/coverage.sh"
   fi
   commit_fixture "$project"
 }
@@ -473,6 +477,7 @@ case "${1:-}" in
     case $2 in
       typescript) write_typescript "$scratch/project" no ;;
       typescript-failing) write_typescript "$scratch/project" yes ;;
+      typescript-partial) write_typescript "$scratch/project" partial ;;
       rust) write_cargo_package "$scratch/project" "$rust_lib_rust" ;;
       rust-split) write_cargo_package "$scratch/project" "$rust_lib_split" ;;
       rust-untested) write_cargo_package "$scratch/project" "$rust_lib_untested" ;;

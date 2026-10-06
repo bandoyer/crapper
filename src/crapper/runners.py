@@ -1,7 +1,8 @@
 """Run each language's coverage tool, and list the reports it wrote for the loader.
 
 Failures are reported and do not stop analysis. A language with no coverage
-tool, or a failed run, scores its functions at 0%.
+tool, or a failed run that wrote no report, scores its functions at 0%. A
+failed run's report is still read, and its `Report.code` says the run failed.
 """
 
 from __future__ import annotations
@@ -27,6 +28,26 @@ _MAVEN = [
 
 def _warn(message: str) -> None:
     print(message, file=sys.stderr)
+
+
+def _ran(language: str, module: Path, code: int, paths: list[Path]) -> list[Report]:
+    """The reports at `paths` from a coverage run in `module` that exited `code`.
+
+    A failed run that wrote a report has that report read, so the warning
+    names it rather than claiming the language scores 0%.
+    """
+
+    if code != 0:
+        written = [str(path) for path in paths if path.is_file()]
+        if written:
+            shown = written[0] + (f" and {len(written) - 1} more" if len(written) > 1 else "")
+            _warn(
+                f"{language} coverage exited {code} in {module}, but wrote {shown}. "
+                "That coverage is read, and may miss lines the failed run never reached."
+            )
+        else:
+            _warn(f"{language} coverage exited {code} in {module}. {language} coverage will score 0%.")
+    return [Report(path, module, code) for path in paths]
 
 
 def _show(command: str | list[str]) -> str:
@@ -81,10 +102,14 @@ def _outside_language_dirs(coverage: Path, path: Path) -> bool:
     return not _COVERAGE_DIRS.intersection(relative.parts)
 
 
+def _cloverage_html(coverage: Path) -> list[Path]:
+    """Cloverage's HTML under `coverage`, outside the other languages' folders."""
+
+    return sorted(path for path in coverage.rglob("*.html") if _outside_language_dirs(coverage, path))
+
+
 def _remove_cloverage_html(coverage: Path) -> None:
-    for path in coverage.rglob("*.html"):
-        if not _outside_language_dirs(coverage, path):
-            continue
+    for path in _cloverage_html(coverage):
         path.unlink()
 
 
@@ -432,10 +457,10 @@ def _cover_clojure(root: Path) -> list[Report]:
     code = run_shell(["clj", "-M:cov", "--lcov"], root)
     if code != 0:
         _warn("clj -M:cov --lcov failed; retrying without --lcov.")
+        _clean_clojure(root)
         code = run_shell(["clj", "-M:cov"], root)
-    if code != 0:
-        _warn(f"Clojure coverage exited {code}. Clojure coverage will score 0%.")
-    return [Report(root / "target" / "coverage" / "lcov.info", root)]
+    coverage = root / "target" / "coverage"
+    return _ran("Clojure", root, code, [coverage / "lcov.info", *_cloverage_html(coverage)])
 
 
 def _cover_java(root: Path, files: list[Path]) -> list[Report]:
@@ -446,14 +471,11 @@ def _cover_java(root: Path, files: list[Path]) -> list[Report]:
     reports = []
     for module in modules:
         report = module / "target" / "site" / "jacoco" / "jacoco.xml"
-        reports.append(Report(report, module))
         _clean_dir(report.parent)
         exec_file = module / "target" / "jacoco.exec"
         if exec_file.exists():
             exec_file.unlink()
-        code = run_shell(_MAVEN, module)
-        if code != 0:
-            _warn(f"Java coverage exited {code} in {module}. Java coverage will score 0%.")
+        reports += _ran("Java", module, run_shell(_MAVEN, module), [report])
     return reports
 
 
@@ -465,13 +487,11 @@ def _cover_go(root: Path, files: list[Path]) -> list[Report]:
     reports = []
     for module in modules:
         profile = module / "target" / "coverage" / "go" / "coverage.out"
-        reports.append(Report(profile, module))
         profile.parent.mkdir(parents=True, exist_ok=True)
         if profile.exists():
             profile.unlink()
         code = run_shell(["go", "test", "./...", f"-coverprofile={profile}"], module)
-        if code != 0:
-            _warn(f"Go coverage exited {code} in {module}. Go coverage will score 0%.")
+        reports += _ran("Go", module, code, [profile])
     return reports
 
 
@@ -509,10 +529,7 @@ def _cover_typescript(root: Path, files: list[Path]) -> list[Report]:
         _prepare_report(report)
         _remove_lcov(package)
         code = run_shell(command, package)
-        if code != 0:
-            _warn(f"TypeScript coverage exited {code} in {package}. TypeScript coverage will score 0%.")
-        reports.append(Report(report, package))
-        reports.extend(Report(path, package) for path in package.glob("coverage/**/lcov.info"))
+        reports += _ran("TypeScript", package, code, [report, *package.glob("coverage/**/lcov.info")])
     return reports
 
 
@@ -533,23 +550,24 @@ def _python_kind(py: str, package: Path) -> str:
 
 def _record_python_lcov(
     package: Path, code: int, data_file: Path, lcov_cmd: str | list[str]
-) -> None:
+) -> int:
+    """Write the LCOV report from the tests' coverage data; return the status its report carries.
+
+    That is the tests' status `code`, or else `coverage lcov`'s.
+    """
+
     if not data_file.exists():
-        if code != 0:
-            _warn(f"Python coverage exited {code} in {package}. Python coverage will score 0%.")
-        return
+        return code
     lcov_code = run_shell(lcov_cmd, package)
     if lcov_code != 0:
-        _warn(f"coverage lcov exited {lcov_code} in {package}. Python coverage will score 0%.")
-    elif code != 0:
-        _warn(f"Python tests exited {code} in {package}. Coverage was still recorded.")
+        _warn(f"coverage lcov exited {lcov_code} in {package}.")
+    return code or lcov_code
 
 
 def _cover_python(root: Path, files: list[Path]) -> list[Report]:
     reports = []
     for package in python_roots(root, files):
         report = _coverage_report(root, package, "python")
-        reports.append(Report(report, package))
         py = _python_executable(package)
         if not _ensure_python_module(py, package, "coverage"):
             _warn(f"coverage is missing in {package}. Python coverage will score 0%.")
@@ -559,7 +577,8 @@ def _cover_python(root: Path, files: list[Path]) -> list[Report]:
         run_cmd, lcov_cmd = python_coverage_commands(
             py, _python_kind(py, package), data_file, report, python_sources(package, files)
         )
-        _record_python_lcov(package, run_shell(run_cmd, package), data_file, lcov_cmd)
+        code = _record_python_lcov(package, run_shell(run_cmd, package), data_file, lcov_cmd)
+        reports += _ran("Python", package, code, [report])
     return reports
 
 
@@ -574,11 +593,9 @@ def _cover_rust(root: Path, files: list[Path]) -> list[Report]:
     reports = []
     for module in modules:
         report = _coverage_report(root, module, "rust")
-        reports.append(Report(report, module))
         report.parent.mkdir(parents=True, exist_ok=True)
         code = run_shell(rust_coverage_command(kind, report), module)
-        if code != 0:
-            _warn(f"Rust coverage exited {code} in {module}. Rust coverage will score 0%.")
+        reports += _ran("Rust", module, code, [report])
     return reports
 
 
@@ -602,8 +619,10 @@ def collect_coverage(root: Path, files: list[Path]) -> list[Report]:
     """Run each language's coverage tool and return the reports this run wrote.
 
     Each collector clears its report paths before it runs, so a path that
-    exists afterward holds this run's report. A failed tool is reported, and
-    its language scores 0% because it wrote nothing.
+    exists afterward holds this run's report. Each report's `code` is the exit
+    status of the run that wrote it. A failed run is reported: its language
+    scores 0% when it wrote nothing, and its report, when it wrote one, comes
+    back with a non-zero `code`, so a caller can refuse it.
     """
 
     root = root.resolve()

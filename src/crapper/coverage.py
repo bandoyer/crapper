@@ -517,14 +517,19 @@ def _read(path: Path) -> str | None:
 
 
 class Report(NamedTuple):
-    """A coverage report, and the module folder its relative `SF:` paths start from.
+    """A coverage report, the module folder its relative `SF:` paths start from, and its run's status.
 
     `module` is None for a report found on disk, whose origin is unknown; its
-    paths stay as written.
+    paths stay as written. `code` is the exit status of the coverage run that
+    wrote the report: 0 when the run succeeded, and for a report found on disk.
+    A failed run can still write a report, such as a Go profile or an LCOV file
+    from tests that failed under coverage, so a non-zero `code` marks coverage
+    that may be missing lines the failed run never reached.
     """
 
     path: Path
     module: Path | None = None
+    code: int = 0
 
 
 def _reports_on_disk(root: Path) -> list[Report]:
