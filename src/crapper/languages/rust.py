@@ -7,9 +7,17 @@ module path (`crate::foo::bar`). Methods are namespaced by the self type
 
 Test code is not scored: bodies inside `mod tests`, and a function that has a
 test attribute or sits in a `mod` or `impl` that has one. A test attribute is
-one whose path ends in `test` (`#[test]`, `#[tokio::test]`), `#[rstest]`, or a
-`cfg` that holds only in a test build (`test`, or `all(...)` with such a part).
-An inner `#![cfg(test)]` marks the file or `mod` body it starts.
+one whose path ends in `test` (`#[test]`, `#[tokio::test]`), one of `#[rstest]`,
+`#[test_case]`, `#[test_matrix]`, `#[proptest]`, `#[property_test]`,
+`#[wasm_bindgen_test]`, and `#[quickcheck]` (bare or with a path), or a `cfg`
+that holds only in a test build (`test`, or `all(...)` with such a part). An
+inner `#![cfg(test)]` marks the file or `mod` body it starts.
+
+A module declared with `mod x;` keeps its body in another file, so crapper
+follows the crate's module tree from its roots (`src/lib.rs`, `src/main.rs`,
+`src/bin/...`) by rustc's rules, and skips a file that every root reaches only
+through test code. A bare `mod tests;` counts as test code by its name, as an
+inline `mod tests { }` does, although rustc compiles it in a normal build.
 """
 
 import re
@@ -36,7 +44,16 @@ _DECISIONS = {
     "match_arm",
     "try_expression",
 }
-_TEST_ATTRIBUTES = {"test", "rstest"}
+_TEST_ATTRIBUTES = {
+    "test",
+    "rstest",
+    "test_case",
+    "test_matrix",
+    "proptest",
+    "property_test",
+    "wasm_bindgen_test",
+    "quickcheck",
+}
 _BEFORE_ITEM = {"attribute_item", "line_comment", "block_comment"}
 _BODIES = {"source_file", "declaration_list"}
 _PACKAGE_BLOCK = re.compile(r"(?ms)^\[package\](.*?)(?:^\[|\Z)")
@@ -129,6 +146,100 @@ def _in_test_code(data: bytes, node) -> bool:
             return True
         current = current.parent
     return False
+
+
+def _is_test_item(data: bytes, node) -> bool:
+    """The item sits in a `mod tests`, or it, or a `mod`, `impl`, or file around it, has a test attribute."""
+
+    return _in_mod_named(data, node, "tests") or _in_test_code(data, node)
+
+
+def _path_attribute(data: bytes, node) -> str | None:
+    """The file a `#[path = "..."]` on the item names, or None."""
+
+    for attribute in _attributes(node):
+        if node_text(data, attribute.children[0]) != "path":
+            continue
+        for item in descendants(attribute):
+            if item.type == "string_content":
+                return node_text(data, item)
+    return None
+
+
+def _declarations(data: bytes, tree):
+    """Each `mod x;` in a parsed file (a `mod` with no body here), with its name."""
+
+    for node in descendants(tree.root_node):
+        if node.type == "mod_item" and child_of_type(node, "declaration_list") is None:
+            ident = child_of_type(node, "identifier")
+            if ident is not None:
+                yield node, node_text(data, ident)
+
+
+def _module_files(module: Path, folder: Path):
+    """Each `mod x;` in a module file, by rustc's rules: the file it loads, the
+    folder where that file's own declarations resolve, and whether the
+    declaration is test code. `folder` is where this file's declarations
+    resolve: beside a crate root, `mod.rs`, or `#[path]` file, and under
+    `a/x/` for a plain module file `a/x.rs`."""
+
+    try:
+        data, tree = parse(module.read_text(encoding="utf-8", errors="replace"), "rust")
+    except OSError:
+        return
+    for node, name in _declarations(data, tree):
+        inline = _ancestor_mods(data, node)
+        base = folder.joinpath(*inline)
+        test = name == "tests" or _is_test_item(data, node)
+        path = _path_attribute(data, node)
+        if path is not None:
+            loaded = ((base if inline else module.parent) / path).resolve()
+            yield loaded, loaded.parent, test
+            continue
+        for loaded in (base / f"{name}.rs", base / name / "mod.rs"):
+            if loaded.is_file():
+                yield loaded.resolve(), (base / name).resolve(), test
+                break
+
+
+def _crate_roots(crate_root: Path) -> list[Path]:
+    src = crate_root / "src"
+    found = [src / "lib.rs", src / "main.rs", *(src / "bin").glob("*.rs"), *(src / "bin").glob("*/main.rs")]
+    return [root.resolve() for root in found if root.is_file()]
+
+
+def _ways_to(target: Path, roots: list[Path]):
+    """Whether each declaration that loads `target` is reached through test code,
+    walking the module tree down from the crate roots. Below the roots, the walk
+    opens only a module whose folder holds `target`, and each module once per
+    test-code state, so a `#[path]` cycle ends."""
+
+    walk = [(root, root.parent, False) for root in roots]
+    seen = set(walk)
+    while walk:
+        module, folder, test = walk.pop()
+        for loaded, below, declared_test in _module_files(module, folder):
+            through_test = test or declared_test
+            if loaded == target:
+                yield through_test
+            elif target.is_relative_to(below) and (loaded, below, through_test) not in seen:
+                seen.add((loaded, below, through_test))
+                walk.append((loaded, below, through_test))
+
+
+def _test_only_file(file: Path, crate_root: Path) -> bool:
+    """At least one crate root reaches the file, and only through test code."""
+
+    target = file.resolve()
+    roots = _crate_roots(crate_root)
+    if target in roots:
+        return False
+    reached = False
+    for through_test in _ways_to(target, roots):
+        if not through_test:
+            return False
+        reached = True
+    return reached
 
 
 def _first_type_name(data: bytes, node) -> str | None:
@@ -226,7 +337,7 @@ def _record_function(data: bytes, node, modules: list[str], path: str) -> Functi
         return None
     if node.parent is not None and node.parent.type == "block":
         return None
-    if _in_mod_named(data, node, "tests") or _in_test_code(data, node):
+    if _is_test_item(data, node):
         return None
     ident = child_of_type(node, "identifier")
     if ident is None:
@@ -245,9 +356,11 @@ def _record_function(data: bytes, node, modules: list[str], path: str) -> Functi
 def functions_in_source(
     source: str, path: str, project_root: str | None = None
 ) -> list[Function]:
-    data, tree = parse(source, "rust")
     located = _absolute(path, project_root)
     crate_name, crate_root = _crate_name(located)
+    if crate_root is not None and _test_only_file(Path(located), crate_root):
+        return []
+    data, tree = parse(source, "rust")
     modules = _file_modules(located, crate_name, crate_root)
     found: list[Function] = []
     for node in descendants(tree.root_node):
