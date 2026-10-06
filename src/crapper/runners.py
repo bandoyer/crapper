@@ -40,9 +40,9 @@ def _ran(language: str, module: Path, code: int, paths: list[Path]) -> list[Repo
     if code != 0:
         written = [str(path) for path in paths if path.is_file()]
         if written:
-            more = f" and {len(written) - 1} more" if len(written) > 1 else ""
+            shown = written[0] + (f" and {len(written) - 1} more" if len(written) > 1 else "")
             _warn(
-                f"{language} coverage exited {code} in {module}, but wrote {written[0]}{more}. "
+                f"{language} coverage exited {code} in {module}, but wrote {shown}. "
                 "That coverage is read, and may miss lines the failed run never reached."
             )
         else:
