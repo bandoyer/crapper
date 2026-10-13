@@ -27,10 +27,11 @@ Preconditions:
   $vc exec "$project" "$T" env PYTHONPATH="$PWD/src" "$env/venv/bin/python" -m crapper --no-coverage
   ```
 
-  Pass: the first transcript block lists `tree-sitter==` and `tree-sitter-language-pack==` at the floors in `pyproject.toml`. The second exits `0`, its table has five rows (`a` in `J`, `crate::r`, `p`, and `t`, and `A` in `p`), its `.metrics/crap.edn` has five entries, and stderr has no `Traceback`. Remove `$env` afterwards.
+  Pass: the first transcript block lists `tree-sitter==` and `tree-sitter-language-pack==` at the floors in `pyproject.toml`. The second exits `0`, its table has six rows (`a` in `J`, `crate::r`, `p`, and `t`, `A` in `p`, and `A` in `C`), its `.metrics/crap.edn` has six entries, and stderr has no `Traceback`. Remove `$env` afterwards.
 
 ## Gotchas
 
 - This recipe runs crapper through `exec`, not `drive`. `drive` runs `./crapper`, which always uses the checkout's `.venv` with current dependencies, so it can't test the floors.
 - `-r pyproject.toml` installs only the dependencies, and `PYTHONPATH` runs this checkout's `src`, so nothing is written inside the checkout.
 - The language pack downloads each grammar on first parse and caches it per pack version under `~/.cache/tree-sitter-language-pack/v<version>`.
+- tree-sitter 0.24 can't load the C# grammar (`Incompatible Language version 15`), which is why the floor is 0.25.
