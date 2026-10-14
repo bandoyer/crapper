@@ -45,7 +45,7 @@ and prints a report sorted worst first.
 
 Languages: Clojure (.clj .cljc .cljs .bb), Java (.java), Go (.go),
 TypeScript and JavaScript (.ts .tsx .mts .cts .js .jsx .mjs .cjs),
-Rust (.rs), Python (.py).
+Rust (.rs), Python (.py), C# (.cs).
 
 Options:
   -h, --help                    Print this help and exit.
@@ -69,6 +69,9 @@ Arguments:
 
 With no paths, source files under the project root are analyzed. Directories
 named {_SKIPPED_DIRS} are skipped, as are {_TEST_PATTERNS}.
+A C# file is skipped in a test project (a folder name with a Test or Tests
+part, or ending in Tests, or a .csproj that marks itself a test project), and
+in its project's bin/ and obj/.
 
 Coverage, when it is produced:
   Clojure      clj -M:cov --lcov, then Cloverage form counts or LCOV
@@ -77,6 +80,8 @@ Coverage, when it is produced:
   TypeScript   npm run coverage, Vitest's own LCOV, or c8 around npm test
   Rust         cargo llvm-cov, or cargo tarpaulin, in the nearest Cargo.toml
   Python       coverage.py LCOV, via pytest or unittest, per project
+  C#           dotnet test --coverlet --coverlet-output-format lcov, once in
+               the project root; test projects need coverlet.MTP
 
 uml-viewer joins .metrics/crap.edn on :namespace and :name.
   Clojure      the ns, and the defn name
@@ -85,6 +90,7 @@ uml-viewer joins .metrics/crap.edn on :namespace and :name.
   TypeScript   dotted module path, or module.Class for methods
   Rust         crate::module, or crate::module::Type for methods
   Python       dotted module path, or module.Class for methods
+  C#           namespace.Class, and the method name (a constructor's is its class's)
 """
 
 

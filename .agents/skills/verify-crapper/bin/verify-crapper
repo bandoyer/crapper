@@ -18,7 +18,7 @@ scratch_root() {
 usage() {
   cat <<USAGE
 usage: verify-crapper doctor
-       verify-crapper project typescript | typescript-failing | typescript-partial | rust | rust-split | rust-untested | rust-workspace | rust-siblings | rust-test-fns | rust-test-macros | rust-test-modules | python-flat | python-mixed | languages | <git repo>
+       verify-crapper project typescript | typescript-failing | typescript-partial | rust | rust-split | rust-untested | rust-workspace | rust-siblings | rust-test-fns | rust-test-macros | rust-test-modules | python-flat | python-mixed | csharp | csharp-no-coverlet | languages | <git repo>
        verify-crapper stale <project> <report path> <source path>
        verify-crapper drive [--path <PATH>] <project> <transcript> [crapper args...]
        verify-crapper exec <project> <transcript> <command> [args...]
@@ -377,7 +377,7 @@ write_python() {
 }
 
 # languages: one function in each tree-sitter language (Python, Rust, Go,
-# TypeScript, Java), so a run parses each grammar crapper takes from the language pack.
+# TypeScript, Java, C#), so a run parses each grammar crapper takes from the language pack.
 write_languages() {
   local project=$1
   mkdir -p "$project"
@@ -386,6 +386,187 @@ write_languages() {
   printf 'package p\nfunc A(x int) int { return f(x) + 1 }\n' >"$project/g.go"
   printf 'function a(x) { return f(x) + 1; }\n' >"$project/t.ts"
   printf 'class J {\n  int a(int x) { return f(x) + 1; }\n}\n' >"$project/J.java"
+  printf 'class C\n{\n    int A(int x) { return F(x) + 1; }\n}\n' >"$project/C.cs"
+  commit_fixture "$project"
+}
+
+# A .csproj in folder $1 named $2.csproj, with $3 inside <Project>, and $4.cs holding class $4 with method $5.
+write_csproj_with_class() {
+  local dir=$1 name=$2 body=$3 class=$4 method=$5
+  mkdir -p "$dir"
+  printf '%s\n' "$body" >"$dir/$name.csproj"
+  printf 'namespace Fixture;\n\npublic class %s\n{\n    public int %s() => 1;\n}\n' "$class" "$method" >"$dir/$class.cs"
+}
+
+# csharp: a net10.0 solution, Clock.slnx, whose global.json picks the
+#   Microsoft.Testing.Platform runner. src/Clock holds Ticker.cs (a file-scoped
+#   namespace: the constructor, Tick, Tock, and Gear.Spin) and Dial.cs (a block
+#   namespace: an interface method with no body, and Dial.Turn, complexity 19).
+#   src/Clock.Tests is an NUnit project on coverlet.MTP whose tests build a
+#   Ticker with a positive start and call Tick on both branches. The folders
+#   outside the solution are criterion 3's test projects and controls
+#   (src/Clock.TestRunner.VsTest ends in Test, and src/Runner references
+#   Microsoft.Testing.Platform as a library; both are scored), and
+#   src/Clock/obj/Generated.cs is build output.
+# csharp-no-coverlet: the same solution, with no coverlet.MTP in the test project.
+write_csharp() {
+  local project=$1 coverlet=$2 plain='<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+</Project>'
+  mkdir -p "$project/src/Clock/obj" "$project/src/Clock.Tests"
+  printf '{\n  "sdk": { "version": "10.0.100", "rollForward": "latestMinor" },\n  "test": { "runner": "Microsoft.Testing.Platform" }\n}\n' >"$project/global.json"
+  printf '<Solution>\n  <Folder Name="/src/">\n    <Project Path="src/Clock/Clock.csproj" />\n    <Project Path="src/Clock.Tests/Clock.Tests.csproj" />\n  </Folder>\n</Solution>\n' >"$project/Clock.slnx"
+  printf '<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n    <TargetFramework>net10.0</TargetFramework>\n    <Nullable>enable</Nullable>\n  </PropertyGroup>\n</Project>\n' >"$project/src/Clock/Clock.csproj"
+  cat >"$project/src/Clock/Ticker.cs" <<'CS'
+namespace Demo.Clock;
+
+public class Ticker
+{
+    private readonly int start;
+
+    public Ticker(int start)
+    {
+        this.start = start < 0 ? 0 : start;
+    }
+
+    public int Tick(int n)
+    {
+        if (n > 0)
+        {
+            return start + n;
+        }
+        return start;
+    }
+
+    public int Tock(int n)
+    {
+        return n > 10 ? n : -n;
+    }
+
+    public class Gear
+    {
+        public int Spin(int turns) => turns * 2;
+    }
+}
+CS
+  # Turn: 1, plus if, &&, for, foreach, while, do, ||, catch, two cases and a
+  # default, ?., ??, two switch arms, a ?: in the local function, one in the
+  # lambda, and the last ?:. That is 19.
+  cat >"$project/src/Clock/Dial.cs" <<'CS'
+namespace Demo.Clock
+{
+    public interface IDial
+    {
+        int Turn(int[] steps, string? label);
+    }
+
+    public class Dial : IDial
+    {
+        public int Turn(int[] steps, string? label)
+        {
+            var total = 0;
+            if (steps.Length == 0 && label == null)
+            {
+                return 0;
+            }
+            for (var i = 0; i < steps.Length; i++)
+            {
+                total += steps[i];
+            }
+            foreach (var step in steps)
+            {
+                total -= step;
+            }
+            while (total > 100)
+            {
+                total /= 2;
+            }
+            do
+            {
+                total++;
+            } while (total < 0 || total > 50);
+            try
+            {
+                total = checked(total * 2);
+            }
+            catch (System.OverflowException)
+            {
+                total = 0;
+            }
+            switch (total)
+            {
+                case 1:
+                case 2:
+                    total = 3;
+                    break;
+                default:
+                    break;
+            }
+            var size = label?.Length ?? 0;
+            var sign = total switch { > 0 => 1, _ => 0 };
+            int Half(int value) => value > 1 ? value / 2 : value;
+            System.Func<int, int> twice = value => value < 0 ? 0 : value * 2;
+            return total > 10 ? Half(size) : twice(sign);
+        }
+    }
+}
+CS
+  printf 'namespace Demo.Clock;\n\npublic class Generated\n{\n    public int Emit() => 1;\n}\n' >"$project/src/Clock/obj/Generated.cs"
+  {
+    printf '<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n    <TargetFramework>net10.0</TargetFramework>\n    <OutputType>Exe</OutputType>\n'
+    printf '    <EnableNUnitRunner>true</EnableNUnitRunner>\n    <IsTestingPlatformApplication>true</IsTestingPlatformApplication>\n  </PropertyGroup>\n'
+    printf '  <ItemGroup>\n    <PackageReference Include="NUnit" Version="4.4.0" />\n    <PackageReference Include="NUnit3TestAdapter" Version="6.3.1" />\n'
+    if [[ $coverlet == yes ]]; then
+      printf '    <PackageReference Include="coverlet.MTP" Version="10.1.0" />\n'
+    fi
+    printf '  </ItemGroup>\n  <ItemGroup>\n    <ProjectReference Include="../Clock/Clock.csproj" />\n  </ItemGroup>\n</Project>\n'
+  } >"$project/src/Clock.Tests/Clock.Tests.csproj"
+  cat >"$project/src/Clock.Tests/TickerTests.cs" <<'CS'
+using NUnit.Framework;
+
+namespace Demo.Clock.Tests;
+
+public class TickerTests
+{
+    [Test]
+    public void Tick_adds_a_positive_n()
+    {
+        Assert.That(new Ticker(1).Tick(2), Is.EqualTo(3));
+    }
+
+    [Test]
+    public void Tick_keeps_the_start_for_zero()
+    {
+        Assert.That(new Ticker(1).Tick(0), Is.EqualTo(1));
+    }
+}
+CS
+  write_csproj_with_class "$project/src/Clock.IntegrationTests" Clock.IntegrationTests "$plain" Wiring Wire
+  write_csproj_with_class "$project/src/Clock.Test.Unit" Clock.Test.Unit "$plain" Unit Check
+  write_csproj_with_class "$project/src/Checks" Checks '<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="3.1.0" />
+  </ItemGroup>
+</Project>' Checker Verify
+  write_csproj_with_class "$project/src/Specs" Specs '<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+</Project>' Spec Describe
+  write_csproj_with_class "$project/src/Probes" Probes '<Project Sdk="MSTest.Sdk/3.6.1">
+</Project>' Probe Poke
+  write_csproj_with_class "$project/src/Clock.UnitTest" Clock.UnitTest '<Project Sdk="MSTest.Sdk/4.2.2">
+</Project>' Drill Repeat
+  write_csproj_with_class "$project/src/Clock.TestRunner.VsTest" Clock.TestRunner.VsTest "$plain" Bridge Relay
+  write_csproj_with_class "$project/src/Runner" Runner '<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Testing.Platform" Version="2.0.0" />
+  </ItemGroup>
+</Project>' Host Launch
+  write_csproj_with_class "$project/src/Contests" Contests "$plain" Contest Score
+  write_csproj_with_class "$project/src/Clock.Testing" Clock.Testing "$plain" Fakes Fake
   commit_fixture "$project"
 }
 
@@ -393,7 +574,7 @@ write_languages() {
 reports() {
   local project=$1
   (cd "$project" && find . \( -path ./node_modules -o -path ./.git \) -prune -o -type f \
-    \( -name lcov.info -o -name coverage.out -o -name jacoco.xml \) -printf '%p  %TF %TT\n' | sort)
+    \( -name lcov.info -o -name 'coverage.*.info' -o -name coverage.out -o -name jacoco.xml \) -printf '%p  %TF %TT\n' | sort)
 }
 
 # Prints each .metrics/crap.edn in the project at $1, so a run from a subfolder, or with
@@ -461,7 +642,7 @@ case "${1:-}" in
     echo "crapper:  $crapper ($("$repo/.venv/bin/python" --version))"
     echo "imports:  $imported"
     echo "checkout: $(checkout)"
-    echo "tools:    npm $(command -v npm >/dev/null && npm --version || echo missing), cargo-llvm-cov $(command -v cargo-llvm-cov >/dev/null && echo found || echo missing)"
+    echo "tools:    npm $(command -v npm >/dev/null && npm --version || echo missing), cargo-llvm-cov $(command -v cargo-llvm-cov >/dev/null && echo found || echo missing), dotnet $(command -v dotnet >/dev/null && dotnet --version || echo missing)"
     # A Rust drive runs cargo in a scratch project, where a mise shim finds no toolchain.
     probe=$(mktemp -d "${scratch_prefix}XXXXXX")
     if (cd "$probe" && cargo llvm-cov --version) >/dev/null 2>&1; then
@@ -490,6 +671,8 @@ case "${1:-}" in
       rust-test-modules) write_modules "$scratch/project" ;;
       python-flat) write_python "$scratch/project" no ;;
       python-mixed) write_python "$scratch/project" yes ;;
+      csharp) write_csharp "$scratch/project" yes ;;
+      csharp-no-coverlet) write_csharp "$scratch/project" no ;;
       languages) write_languages "$scratch/project" ;;
       *) git clone -q -- "$2" "$scratch/project" ;;
     esac

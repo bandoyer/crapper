@@ -92,7 +92,7 @@ def _clean_dir(path: Path) -> None:
         shutil.rmtree(path)
 
 
-_COVERAGE_DIRS = {"typescript", "rust", "go", "python"}
+_COVERAGE_DIRS = {"typescript", "rust", "go", "python", "csharp"}
 
 
 def _outside_language_dirs(coverage: Path, path: Path) -> bool:
@@ -599,6 +599,28 @@ def _cover_rust(root: Path, files: list[Path]) -> list[Report]:
     return reports
 
 
+_COVERLET_NEEDS = (
+    'C# coverage needs coverlet.MTP in each test project, and "test": {"runner": '
+    '"Microsoft.Testing.Platform"} in global.json.'
+)
+
+
+def _cover_csharp(root: Path) -> list[Report]:
+    """One `dotnet test` in the root, with coverlet.MTP writing LCOV to target/coverage/csharp.
+
+    coverlet.MTP names each file `coverage.<number>.info` and keeps every
+    earlier run's file, so `_clear_reports` empties the folder first.
+    """
+
+    results = root / "target" / "coverage" / "csharp"
+    command = ["dotnet", "test", "--coverlet", "--coverlet-output-format", "lcov"]
+    code = run_shell([*command, "--results-directory", str(results)], root)
+    reports = _ran("C#", root, code, sorted(results.glob("coverage.*.info")))
+    if not reports:
+        _warn(_COVERLET_NEEDS)
+    return reports
+
+
 def _clear_reports(root: Path, languages: set[str]) -> None:
     """Remove the reports crapper's collectors write for these languages.
 
@@ -607,7 +629,7 @@ def _clear_reports(root: Path, languages: set[str]) -> None:
     report behind to be read as this run's coverage.
     """
 
-    for language in languages & {"typescript", "python", "rust"}:
+    for language in languages & {"typescript", "python", "rust", "csharp"}:
         _clean_dir(root / "target" / "coverage" / language)
     if "typescript" in languages:
         _remove_lcov(root)
@@ -641,6 +663,8 @@ def collect_coverage(root: Path, files: list[Path]) -> list[Report]:
         reports += _cover_python(root, files)
     if "rust" in languages:
         reports += _cover_rust(root, files)
+    if "csharp" in languages:
+        reports += _cover_csharp(root)
     return [report for report in reports if report.path.is_file()]
 
 

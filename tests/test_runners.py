@@ -578,6 +578,8 @@ _COLLECTORS = {
                "demo.py", "target/coverage/python/lcov.info"),
     "Rust": ({"Cargo.toml": '[package]\nname = "clock"\nversion = "0.1.0"\n', "src/lib.rs": "pub fn tick() {}\n"},
              "src/lib.rs", "target/coverage/rust/lcov.info"),
+    "C#": ({"Clock.slnx": "<Solution />\n", "src/Clock/Ticker.cs": "class Ticker { int Tick() { return 1; } }\n"},
+           "src/Clock/Ticker.cs", "target/coverage/csharp/coverage.131026234826733.info"),
 }
 
 
@@ -593,6 +595,8 @@ def _report_written_by(command, cwd: Path) -> Path | None:
             return Path(arg.split("=", 1)[1])
     if "--output-path" in args:
         return Path(args[args.index("--output-path") + 1])
+    if "--results-directory" in args:
+        return Path(args[args.index("--results-directory") + 1]) / "coverage.131026234826733.info"
     if "coverage lcov" in text:
         return Path(args[args.index("-o") + 1])
     folders = {"npm": "coverage/lcov.info", "mvn": "target/site/jacoco/jacoco.xml", "clj": "target/coverage/lcov.info"}
@@ -796,3 +800,46 @@ def test_cloverage_html_in_another_languages_folder_is_not_clojures(tmp_path, mo
     _clojure_attempts(monkeypatch, (0, ["target/coverage/lcov.info"]), (0, []))
     reports, report = _collect(tmp_path, "Clojure")
     assert [(item.path, item.code) for item in reports] == [(report, 0)]
+
+
+_DOTNET_TEST = ["dotnet", "test", "--coverlet", "--coverlet-output-format", "lcov", "--results-directory"]
+
+
+def test_csharp_coverage_runs_dotnet_test_once_in_the_root_into_a_cleared_folder(tmp_path, monkeypatch, capsys):
+    """#271: coverlet.MTP keeps every earlier run's file, so crapper clears its results folder first."""
+
+    results = tmp_path.resolve() / "target" / "coverage" / "csharp"
+    stale = _write(tmp_path, "target/coverage/csharp/coverage.1.info", "SF:x\nend_of_record\n")
+    seen = []
+
+    def shell(command, cwd):
+        seen.append((command, cwd, stale.exists()))
+        for number in ("131026234826734", "131026234826733"):
+            _write(results, f"coverage.{number}.info", "SF:x\nend_of_record\n")
+        return 0
+
+    monkeypatch.setattr("crapper.runners.run_shell", shell)
+    sources = [_write(tmp_path, f"src/{name}/Code.cs", "class Code { }\n") for name in ("Clock", "Dial")]
+    reports = collect_coverage(tmp_path, sources)
+    assert seen == [([*_DOTNET_TEST, str(results)], tmp_path.resolve(), False)]
+    assert [(report.path.name, report.code) for report in reports] == [
+        ("coverage.131026234826733.info", 0),
+        ("coverage.131026234826734.info", 0),
+    ]
+    assert capsys.readouterr().err == ""
+
+
+def test_csharp_coverage_names_what_it_needs_only_when_the_run_wrote_nothing(tmp_path, monkeypatch, capsys):
+    needs = (
+        'C# coverage needs coverlet.MTP in each test project, and "test": {"runner": '
+        '"Microsoft.Testing.Platform"} in global.json.'
+    )
+    _fake_tools(monkeypatch, 5, write=False)
+    assert _collect(tmp_path, "C#")[0] == []
+    assert capsys.readouterr().err.splitlines()[-2:] == [
+        f"C# coverage exited 5 in {tmp_path.resolve()}. C# coverage will score 0%.",
+        needs,
+    ]
+    _fake_tools(monkeypatch, 5, write=True)
+    assert len(_collect(tmp_path, "C#")[0]) == 1
+    assert needs not in capsys.readouterr().err

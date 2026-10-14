@@ -1,6 +1,6 @@
 # crapper
 
-CRAP scores for Clojure, Java, Go, TypeScript, Rust, and Python. One run detects the language of each source file, applies that language's complexity and coverage rules, and writes the snapshot [uml-viewer](https://github.com/unclebob/uml-viewer) already reads.
+CRAP scores for Clojure, Java, Go, TypeScript, Rust, Python, and C#. One run detects the language of each source file, applies that language's complexity and coverage rules, and writes the snapshot [uml-viewer](https://github.com/unclebob/uml-viewer) already reads.
 
 The formula is the one from [crap4clj](https://github.com/unclebob/crap4clj), [crap4java](https://github.com/unclebob/crap4java), and [crap4go](https://github.com/unclebob/crap4go):
 
@@ -16,7 +16,7 @@ CRAP = CC² × (1 − coverage)³ + CC
 ./crapper
 ```
 
-The first run creates `.venv` and installs the tool. From a project root it walks the tree, skips `test`, `spec`, `vendor`, `node_modules`, and `target`, and writes two results:
+The first run creates `.venv` and installs the tool. On Windows, run `crapper.cmd`. It makes `.venv` with `py -3`, or `python` when the `py` launcher is missing, and runs `.venv\Scripts\python.exe` in Python's UTF-8 mode, so output sent to a file or a pipe can hold the help's `−` and any name outside the Windows code page. It treats `.venv` as made once it imports crapper, so an install cut short is made again on the next run, and a failed install removes `.venv` when that run made it. From a project root it walks the tree, skips `test`, `spec`, `vendor`, `node_modules`, and `target`, and writes two results:
 
 - a table on stdout, worst score first
 - `.metrics/crap.edn`, replaced on every successful analysis
@@ -52,6 +52,7 @@ uml-viewer groups entries by `:namespace` and joins each operation on `:name`. `
 | TypeScript | the dotted module path, or `module.Class` | the function or method name |
 | Rust | `crate::module`, or `crate::module::Type` | the function or method name |
 | Python | the dotted module path, or `module.Class` | the function or method name |
+| C# | `Namespace.Class`, or `Namespace.Outer.Inner` | the method name; a constructor's is its class's |
 
 Rename or move is a new entry. There is no identity matching across runs.
 
@@ -67,6 +68,8 @@ TypeScript, TSX, and JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`) use the same str
 
 Rust counts `if`, loops, each `match` arm, `?`, and `&&` / `||`. Test code is skipped: `mod tests`, a function with a test attribute (`#[test]`, `#[tokio::test]` and other paths ending in `test`, `#[rstest]`, `#[test_case]`, `#[test_matrix]`, `#[proptest]`, `#[property_test]`, `#[wasm_bindgen_test]`, `#[quickcheck]`), and anything under `#[cfg(test)]`, including a `mod`, an `impl`, a file that starts `#![cfg(test)]`, and a `cfg(all(...))` that includes `test`. A module declared with `mod x;` whose body is in its own file follows the same rules: crapper follows `mod` declarations, including `#[path]`, from `src/lib.rs`, `src/main.rs`, and `src/bin/`, and skips a file those roots reach only through test code. A bare `mod tests;` is skipped by its name, though rustc compiles it in a normal build. Coverage is LCOV from `cargo llvm-cov` or `cargo tarpaulin`, run in the nearest directory that contains `Cargo.toml`. When neither tool is installed, the run installs `cargo-llvm-cov`.
 
+C# counts Java's decisions (`if`, loops, `catch`, `?:`, each `case` and `default` label, `&&` and `||`), plus each switch-expression arm, `??`, and `?.`. A `when` guard and the `and` and `or` patterns don't count. Methods and constructors with a body are entries, and local functions and lambdas stay inside the member that holds them. A file in a test project isn't scored. A test project's folder name has a `Test` or `Tests` part, or ends in `Tests` (`App.Tests`, `App.Test.Unit`, `App.IntegrationTests`), with that case. Or its `.csproj` sets `IsTestProject`, uses `MSTest.Sdk` as its SDK, or references `Microsoft.NET.Test.Sdk`, `NUnit`, `xunit`, `xunit.v3`, `MSTest`, or `MSTest.TestFramework`. A name ending in `Test` isn't enough, since `Stryker.TestRunner.VsTest` is production code, and neither is a reference to `Microsoft.Testing.Platform`, which a test runner uses as a library. Nor is a file under the project's `bin/` or `obj/`, which hold build output. Coverage is LCOV from coverlet.MTP, through one `dotnet test` in the project root, so each test project needs a `coverlet.MTP` package reference, and `global.json` needs `"test": {"runner": "Microsoft.Testing.Platform"}`. Without that runner, `dotnet test` rejects `--coverlet`, and C# scores 0%.
+
 Python counts `if`, `elif`, `for`, `while`, `except`, each `match` case, a comprehension filter, a conditional expression, and each `and` / `or`. Nested functions stay inside the enclosing function. Coverage is LCOV from `coverage.py`, running pytest when the project uses it and `unittest` otherwise. It measures each top-level folder that holds a source file, and the project folder itself (`--source=.`) when a source file sits there or a folder name holds a comma, so a flat project's test files show up in `lcov.info` too. `coverage` and `pytest` are installed into the project's interpreter when they are missing.
 
 ## Coverage commands
@@ -81,6 +84,7 @@ By default a run deletes the previous report for each language it is about to me
 | TypeScript | `npm run coverage`, or Vitest `--coverage`, or `npx c8 ... npm test`, per package | the package's `coverage/**/lcov.info` or `target/coverage/typescript/lcov.info` |
 | Rust | `cargo llvm-cov` or `cargo tarpaulin`, per Cargo package | `target/coverage/rust/lcov.info` |
 | Python | `coverage run` with pytest or unittest, then `coverage lcov` | `target/coverage/python/lcov.info` |
+| C# | `dotnet test --coverlet --coverlet-output-format lcov --results-directory target/coverage/csharp`, once in the project root | `target/coverage/csharp/coverage.<number>.info` |
 
 A default run reads only the reports these commands wrote in this run. Another report on disk, such as a hand-made root `coverage.out` or a leftover `coverage/lcov.info` in a Rust package, is ignored and left in place. A relative `SF:` path in a report resolves against the module that wrote it (the Cargo package, Python project, or npm package), so two packages that both say `SF:src/core.py` keep their own coverage. A source file matches an absolute `SF:` path by its path under the project root (`--root`), whichever folder crapper runs from. `--use-existing-coverage` and `--coverage-command` read every report in the usual places, with paths as written.
 

@@ -1,6 +1,6 @@
 ---
 name: verify-crapper
-description: Drive this checkout's crapper CLI against a scratch project (a built-in TypeScript or Rust fixture, or a clone of a real repo) and capture proof (command, stdout, stderr, exit code, the coverage reports on disk before and after, the .metrics/crap.edn snapshot, and tracked files changed). Use to verify any crapper behaviour the way a user would see it, including which coverage reports a run reads.
+description: Drive this checkout's crapper CLI against a scratch project (a built-in TypeScript, Rust, Python or C# fixture, or a clone of a real repo) and capture proof (command, stdout, stderr, exit code, the coverage reports on disk before and after, the .metrics/crap.edn snapshot, and tracked files changed). Use to verify any crapper behaviour the way a user would see it, including which coverage reports a run reads.
 ---
 
 # Verify crapper
@@ -27,7 +27,7 @@ It is ready when `$vc doctor` prints `doctor: ok`. Teardown is `$vc cleanup <pro
 $vc doctor
 ```
 
-It changes no project file. It fails if the launcher is missing, `./crapper --help` fails, or `.venv` imports `crapper` from anywhere but this checkout's `src/`. On success it prints the Python version, the imported path, the checkout's commit and branch (and whether `src/`, the launcher, or `pyproject.toml` have uncommitted changes), whether `npm` and `cargo-llvm-cov` are on `PATH`, and whether `cargo llvm-cov` runs in a scratch project. When it doesn't and cargo comes from mise, export `MISE_RUST_VERSION` (for example `1.98.0`) before a Rust drive.
+It changes no project file. It fails if the launcher is missing, `./crapper --help` fails, or `.venv` imports `crapper` from anywhere but this checkout's `src/`. On success it prints the Python version, the imported path, the checkout's commit and branch (and whether `src/`, the launcher, or `pyproject.toml` have uncommitted changes), whether `npm`, `cargo-llvm-cov` and `dotnet` are on `PATH`, and whether `cargo llvm-cov` runs in a scratch project. When it doesn't and cargo comes from mise, export `MISE_RUST_VERSION` (for example `1.98.0`) before a Rust drive.
 
 ## Drive
 
@@ -45,7 +45,9 @@ project=$($vc project rust-test-macros)      # #[tokio::test], #[rstest], #[test
 project=$($vc project rust-test-modules)     # the crate tree: test-only modules declared with `mod x;` and kept in their own files, plus production modules
 project=$($vc project python-flat)           # demo.py (tick tested, tock not) and extra.py (never imported) at the root, a root test, and a .venv that sees python3's coverage and pytest
 project=$($vc project python-mixed)          # python-flat plus the package gears/ (spin tested)
-project=$($vc project languages)             # one function in each of Python, Rust, Go, TypeScript, and Java; no coverage tooling
+project=$($vc project csharp)                # a net10.0 solution: Ticker and Dial in src/Clock, an NUnit test project on coverlet.MTP, test-project folders outside the solution
+project=$($vc project csharp-no-coverlet)    # the same solution, with no coverlet.MTP in its test project
+project=$($vc project languages)             # one function in each of Python, Rust, Go, TypeScript, Java, and C#; no coverage tooling
 project=$($vc project ~/Work/bujo)           # or a fresh git clone of a real project (committed files only)
 $vc stale "$project" coverage/lcov.info src/clock.ts     # leave an earlier run's report: every line covered, dated 2 days ago
 $vc drive "$project" <transcript> [crapper args...]
@@ -56,7 +58,7 @@ $vc exec "$project" <transcript> <command> [args...]
 `drive` runs this checkout's `./crapper <args...>` with the project as the working directory, exactly as a user would type it there. `exec` runs any other command the same way. Both append one block to `<transcript>` and also print it:
 
 - the command, any `PATH` override, the date and time, the crapper commit, and the exit code
-- the coverage reports on disk before the run (`lcov.info`, `coverage.out`, `jacoco.xml`, with modification times), listed from the project's top folder even when `<project>` is a folder inside it
+- the coverage reports on disk before the run (`lcov.info`, `coverage.<number>.info`, `coverage.out`, `jacoco.xml`, with modification times), listed from the project's top folder even when `<project>` is a folder inside it
 - stdout and stderr
 - the coverage reports on disk after the run
 - `.metrics/crap.edn`, and any other `.metrics/crap.edn` in the project, headed by its path (a run with `--root` writes it there)
@@ -81,4 +83,4 @@ This removes only a scratch folder that `$vc project` created (`$TMPDIR/crapper-
 
 ## Helpers
 
-`bin/verify-crapper` subcommands: `doctor`, `project typescript | typescript-failing | typescript-partial | rust | rust-split | rust-untested | rust-workspace | rust-siblings | rust-test-fns | rust-test-macros | rust-test-modules | python-flat | python-mixed | languages | <git repo>`, `stale <project> <report> <source>`, `drive [--path <PATH>] <project> <transcript> [crapper args...]`, `exec <project> <transcript> <command> [args...]`, `cleanup <project>`. Running it with no arguments prints usage.
+`bin/verify-crapper` subcommands: `doctor`, `project typescript | typescript-failing | typescript-partial | rust | rust-split | rust-untested | rust-workspace | rust-siblings | rust-test-fns | rust-test-macros | rust-test-modules | python-flat | python-mixed | csharp | csharp-no-coverlet | languages | <git repo>`, `stale <project> <report> <source>`, `drive [--path <PATH>] <project> <transcript> [crapper args...]`, `exec <project> <transcript> <command> [args...]`, `cleanup <project>`. Running it with no arguments prints usage.
