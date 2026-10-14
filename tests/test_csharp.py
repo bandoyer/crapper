@@ -161,7 +161,7 @@ def test_files_in_a_test_project_are_not_scored(tmp_path):
         _project(tmp_path / "Clock.Tests"),
         _project(tmp_path / "Clock.Test.Unit"),
         _project(tmp_path / "Clock.IntegrationTests"),
-        _project(tmp_path / "Clock.UnitTest"),
+        _project(tmp_path / "Clock.UnitTest", '<Project Sdk="MSTest.Sdk/4.2.2"></Project>'),
         _project(tmp_path / "Tests"),
         _project(tmp_path / "Specs", "<Project><PropertyGroup><IsTestProject> true </IsTestProject></PropertyGroup></Project>"),
         _project(tmp_path / "Sdk", _references("Microsoft.NET.Test.Sdk")),
@@ -169,7 +169,8 @@ def test_files_in_a_test_project_are_not_scored(tmp_path):
         _project(tmp_path / "Xunit", _references("xunit.v3")),
         _project(tmp_path / "Xunit2", _references("xunit")),
         _project(tmp_path / "Mstest", _references("MSTest.TestFramework")),
-        _project(tmp_path / "Probes", '<Project Sdk="MSTest.Sdk/4.2.2"></Project>'),
+        _project(tmp_path / "Meta", _references("MSTest")),
+        _project(tmp_path / "Probes", '<Project Sdk="MSTest.Sdk/3.6.1"></Project>'),
         _project(tmp_path / "Sampler", '<Project Sdk="MSTest.Sdk"></Project>'),
     ]
     deeper = tmp_path / "Clock.Tests" / "Fakes" / "Clock.cs"
@@ -186,6 +187,8 @@ def test_files_in_other_projects_and_in_no_project_are_scored(tmp_path):
         _project(tmp_path / "Clock.Testing"),
         _project(tmp_path / "Clock", "<Project><PropertyGroup><IsTestProject>false</IsTestProject></PropertyGroup></Project>"),
         _project(tmp_path / "Lite", _references("NUnitLite")),
+        _project(tmp_path / "Stryker.TestRunner.VsTest"),
+        _project(tmp_path / "Tools.UnitTest"),
         _project(tmp_path / "Runner", _references("Microsoft.Testing.Platform")),
         _project(tmp_path / "Hooks", _references("Microsoft.Testing.Platform.MSBuild")),
         _project(tmp_path / "Asserts", _references("xunit.assert")),

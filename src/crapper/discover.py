@@ -75,7 +75,8 @@ JS_TEST_SUFFIXES = (
 CSHARP_TEST_PROJECT = re.compile(
     r"<IsTestProject>\s*true\s*</IsTestProject>"
     r'|\bSdk="MSTest\.Sdk(?:/[^"]*)?"'
-    r'|<PackageReference\b[^>]*\bInclude="(?:Microsoft\.NET\.Test\.Sdk|NUnit|xunit|xunit\.v3|MSTest\.TestFramework)"',
+    r'|<PackageReference\b[^>]*\bInclude="'
+    r'(?:Microsoft\.NET\.Test\.Sdk|NUnit|xunit|xunit\.v3|MSTest|MSTest\.TestFramework)"',
     re.IGNORECASE,
 )
 CSHARP_BUILD_DIRS = {"bin", "obj"}
@@ -105,12 +106,12 @@ def _is_csharp_test_project(project: Path) -> bool:
     """Whether a C# project is a test project.
 
     A part of its folder's name is Test or Tests (App.Tests, App.Test.Unit),
-    the name ends in Test or Tests (App.UnitTest, App.IntegrationTests), or
-    its .csproj says so.
+    the name ends in Tests (App.IntegrationTests), or its .csproj says so. A
+    name ending in Test isn't enough: Stryker.TestRunner.VsTest is production code.
     """
 
     name = project.name
-    if {"Test", "Tests"} & set(name.split(".")) or name.endswith(("Test", "Tests")):
+    if {"Test", "Tests"} & set(name.split(".")) or name.endswith("Tests"):
         return True
     return any(
         CSHARP_TEST_PROJECT.search(csproj.read_text(encoding="utf-8", errors="replace"))

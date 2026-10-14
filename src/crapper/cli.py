@@ -70,8 +70,8 @@ Arguments:
 With no paths, source files under the project root are analyzed. Directories
 named {_SKIPPED_DIRS} are skipped, as are {_TEST_PATTERNS}.
 A C# file is skipped in a test project (a folder name with a Test or Tests
-part, or ending in Test or Tests, or a .csproj that marks itself a test
-project), and in its project's bin/ and obj/.
+part, or ending in Tests, or a .csproj that marks itself a test project), and
+in its project's bin/ and obj/.
 
 Coverage, when it is produced:
   Clojure      clj -M:cov --lcov, then Cloverage form counts or LCOV

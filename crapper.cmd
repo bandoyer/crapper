@@ -2,7 +2,10 @@
 rem Run the CRAP tool on Windows, creating a local virtualenv on first use.
 rem The venv comes from py -3, or from python when the py launcher is missing.
 rem A failed install removes the half-made venv, so the next run tries again.
+rem UTF-8 mode lets output sent to a file or a pipe hold characters outside the
+rem Windows code page, such as the minus sign in the help's formula.
 setlocal
+set "PYTHONUTF8=1"
 set "ROOT=%~dp0"
 set "PY=%ROOT%.venv\Scripts\python.exe"
 if exist "%PY%" goto run
