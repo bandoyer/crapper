@@ -1,9 +1,11 @@
 """Load Cloverage, LCOV, JaCoCo, and Go coverage profiles.
 
 Clojure prefers Cloverage's per-line form counts, then LCOV. Java uses JaCoCo
-instruction counters. Go uses statement profiles. LCOV scores a function by
-its BRDA branch records when it has any, and by line hits otherwise. LCOV
-records for the same file, in one report or several, combine into one.
+instruction counters. Go uses statement profiles. An LCOV report is named
+`lcov.info`, or `coverage.<number>.info` as coverlet.MTP writes it for C#.
+LCOV scores a function by its BRDA branch records when it has any, and by
+line hits otherwise. LCOV records for the same file, in one report or
+several, combine into one.
 `percent_for` returns None when the file is absent; analysis turns that into 0%.
 
 `load_bundle(root, reports)` reads only the given reports, as a default run
@@ -30,6 +32,7 @@ _LCOV_DA = re.compile(r"DA:(\d+),(\d+)")
 _LCOV_BRDA = re.compile(r"BRDA:(\d+),([^,]*),([^,]*),(-|\d+)")
 _DOCTYPE = re.compile(r"<!DOCTYPE[^>]*>", re.IGNORECASE)
 _LCOV_SF = re.compile(r"^(\s*SF:)(.*?)\s*$", re.MULTILINE)
+_LCOV_NAME = r"lcov\.info|coverage\.\d+\.info"
 
 
 class FileCoverage(dict):
@@ -534,6 +537,7 @@ class Report(NamedTuple):
 
 def _reports_on_disk(root: Path) -> list[Report]:
     paths = list(root.glob("target/coverage/**/lcov.info"))
+    paths.extend(root.glob("target/coverage/**/coverage.*.info"))
     paths.extend(root.glob("coverage/**/lcov.info"))
     paths.extend(
         [
@@ -563,13 +567,13 @@ def _resolve_sources(text: str, module: Path) -> str:
 
 
 def _report_texts(reports: list[Report], name: str) -> list[tuple[Report, str]]:
-    """Each report file called `name`, once per file, with its text."""
+    """Each report file whose name matches the pattern `name`, once per file, with its text."""
 
     texts: list[tuple[Report, str]] = []
     seen: set[Path] = set()
     for report in reports:
         resolved = report.path.resolve()
-        if report.path.name != name or resolved in seen:
+        if not re.fullmatch(name, report.path.name) or resolved in seen:
             continue
         seen.add(resolved)
         text = _read(report.path)
@@ -583,14 +587,14 @@ def _merge_lcov(reports: list[Report]) -> dict[str, FileCoverage]:
 
     texts = [
         text if report.module is None else _resolve_sources(text, report.module)
-        for report, text in _report_texts(reports, "lcov.info")
+        for report, text in _report_texts(reports, _LCOV_NAME)
     ]
     return parse_lcov("\n".join(texts))
 
 
 def _merge_go(reports: list[Report]) -> dict[str, list[tuple[int, int, int, int]]]:
     merged: dict[str, list[tuple[int, int, int, int]]] = {}
-    for _report, text in _report_texts(reports, "coverage.out"):
+    for _report, text in _report_texts(reports, r"coverage\.out"):
         for key, segments in parse_go_profile(text).items():
             merged.setdefault(key, []).extend(segments)
     return merged
@@ -598,7 +602,7 @@ def _merge_go(reports: list[Report]) -> dict[str, list[tuple[int, int, int, int]
 
 def _merge_jacoco(reports: list[Report]) -> dict[str, list[JacocoMethod]]:
     merged: dict[str, list[JacocoMethod]] = {}
-    for _report, text in _report_texts(reports, "jacoco.xml"):
+    for _report, text in _report_texts(reports, r"jacoco\.xml"):
         for key, methods in parse_jacoco_index(text).items():
             merged.setdefault(key, []).extend(methods)
     return merged

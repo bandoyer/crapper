@@ -1,6 +1,8 @@
 """Find source files and decide which language each one is written in."""
 
 import os
+import re
+from functools import lru_cache
 from pathlib import Path
 
 EXTENSIONS = {
@@ -20,6 +22,7 @@ EXTENSIONS = {
     ".cjs": "typescript",
     ".rs": "rust",
     ".py": "python",
+    ".cs": "csharp",
 }
 
 SKIP_DIRS = {
@@ -66,6 +69,18 @@ JS_TEST_SUFFIXES = (
 )
 
 
+# A C# test project's .csproj says so, uses MSTest.Sdk, or references a test
+# framework: the rule skillflow #270, #271 and #272 share. Microsoft.Testing.Platform
+# isn't one, since production code, such as a test runner, references it too.
+CSHARP_TEST_PROJECT = re.compile(
+    r"<IsTestProject>\s*true\s*</IsTestProject>"
+    r'|\bSdk="MSTest\.Sdk(?:/[^"]*)?"'
+    r'|<PackageReference\b[^>]*\bInclude="(?:Microsoft\.NET\.Test\.Sdk|NUnit|xunit|xunit\.v3|MSTest\.TestFramework)"',
+    re.IGNORECASE,
+)
+CSHARP_BUILD_DIRS = {"bin", "obj"}
+
+
 def language_of(path: str | Path) -> str | None:
     file_path = Path(path)
     name = file_path.name
@@ -74,7 +89,53 @@ def language_of(path: str | Path) -> str | None:
     return EXTENSIONS.get(file_path.suffix)
 
 
+@lru_cache(maxsize=None)
+def _csharp_project(folder: Path) -> Path | None:
+    """The nearest folder at or above `folder` that holds a .csproj."""
+
+    if any(folder.glob("*.csproj")):
+        return folder
+    if folder.parent == folder:
+        return None
+    return _csharp_project(folder.parent)
+
+
+@lru_cache(maxsize=None)
+def _is_csharp_test_project(project: Path) -> bool:
+    """Whether a C# project is a test project.
+
+    A part of its folder's name is Test or Tests (App.Tests, App.Test.Unit),
+    the name ends in Test or Tests (App.UnitTest, App.IntegrationTests), or
+    its .csproj says so.
+    """
+
+    name = project.name
+    if {"Test", "Tests"} & set(name.split(".")) or name.endswith(("Test", "Tests")):
+        return True
+    return any(
+        CSHARP_TEST_PROJECT.search(csproj.read_text(encoding="utf-8", errors="replace"))
+        for csproj in project.glob("*.csproj")
+    )
+
+
+def _csharp_unscored(path: Path) -> bool:
+    """A C# file in a test project, or in its project's bin/ or obj/ build output."""
+
+    file_path = path.absolute()
+    project = _csharp_project(file_path.parent)
+    if project is None:
+        return False
+    inside = file_path.parent.relative_to(project).parts
+    return bool(CSHARP_BUILD_DIRS.intersection(inside)) or _is_csharp_test_project(project)
+
+
 def is_test_file(path: str | Path) -> bool:
+    """Whether `path` is test code, which crapper doesn't score.
+
+    A C# file in a test project counts, and so does one in its project's
+    bin/ or obj/, which hold build output, not source.
+    """
+
     file_path = Path(path)
     name = file_path.name
     if name.endswith(GO_TEST_SUFFIX):
@@ -86,6 +147,8 @@ def is_test_file(path: str | Path) -> bool:
     if name == "conftest.py":
         return True
     if name.endswith("_test.py") or (name.startswith("test_") and name.endswith(".py")):
+        return True
+    if file_path.suffix == ".cs" and _csharp_unscored(file_path):
         return True
     return any(part in TEST_DIRS for part in file_path.parts)
 

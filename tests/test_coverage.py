@@ -269,3 +269,22 @@ def test_without_a_root_a_source_has_no_absolute_candidate():
 
     bundle = CoverageBundle(lcov={"pkg/lib.rs": {1: (1, 1)}})
     assert bundle.percent_for(function(path="pkg/src/lib.rs", start_line=1, end_line=1)) is None
+
+
+def test_coverlets_numbered_report_is_read_as_lcov(tmp_path):
+    """#271: coverlet.MTP names its LCOV file `coverage.<number>.info`, from the run's time."""
+
+    source = (tmp_path / "src" / "Clock" / "Ticker.cs").resolve().as_posix()
+    folder = tmp_path / "target" / "coverage" / "csharp"
+    folder.mkdir(parents=True)
+    report = folder / "coverage.131026234826733.info"
+    report.write_text(f"SF:{source}\nDA:3,1\nBRDA:3,0,0,1\nBRDA:3,0,1,0\nend_of_record\n", encoding="utf-8")
+    (folder / "coverage.old.info").write_text(
+        f"SF:{source}\nDA:3,1\nBRDA:3,0,0,1\nBRDA:3,0,1,1\nend_of_record\n", encoding="utf-8"
+    )
+    tick = function(
+        name="Tick", namespace="Demo.Clock.Ticker", path="src/Clock/Ticker.cs", language="csharp", end_line=4
+    )
+    for bundle in (load_bundle(tmp_path, [Report(report, tmp_path)]), load_bundle(tmp_path)):
+        bundle.bind_sources([tick.path], tmp_path)
+        assert bundle.percent_for(tick) == 50.0

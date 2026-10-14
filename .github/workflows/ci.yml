@@ -36,3 +36,41 @@ jobs:
       # The uml launcher must stay POSIX sh, so it runs where zsh doesn't (#9).
       - run: sudo apt-get update && sudo apt-get install -y shellcheck
       - run: shellcheck --shell=sh uml
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # crapper.cmd makes .venv on first use, as the POSIX launcher does, and
+      # runs .venv\Scripts\python.exe (skillflow #271). A .cmd called from a
+      # cmd step needs `call`, or the step ends when it does.
+      - name: The first run makes .venv and prints the help
+        shell: cmd
+        run: |
+          call crapper.cmd --help > first.txt
+          if errorlevel 1 (type first.txt & exit /b 1)
+          type first.txt
+          if not exist .venv\Scripts\python.exe exit /b 1
+          findstr /c:"Usage: crapper" first.txt || exit /b 1
+      - name: A second run prints the help without installing
+        shell: cmd
+        run: |
+          call crapper.cmd --help > second.txt
+          if errorlevel 1 (type second.txt & exit /b 1)
+          type second.txt
+          findstr /c:"Successfully installed" second.txt && exit /b 1
+          findstr /c:"Usage: crapper" second.txt || exit /b 1
+      # With no report on disk, Open scores 0% and CRAP 6, above the threshold.
+      - name: crapper's exit status reaches the caller
+        shell: cmd
+        run: |
+          mkdir "%RUNNER_TEMP%\project"
+          > "%RUNNER_TEMP%\project\Gate.cs" echo class Gate { int Open(bool a) { return a ? 1 : 0; } }
+          cd /d "%RUNNER_TEMP%\project"
+          call "%GITHUB_WORKSPACE%\crapper.cmd" --use-existing-coverage --threshold 0
+          if not errorlevel 2 exit /b 1
+          if errorlevel 3 exit /b 1
+          exit /b 0
