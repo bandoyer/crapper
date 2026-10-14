@@ -404,8 +404,9 @@ write_csproj_with_class() {
 #   namespace: an interface method with no body, and Dial.Turn, complexity 19).
 #   src/Clock.Tests is an NUnit project on coverlet.MTP whose tests build a
 #   Ticker with a positive start and call Tick on both branches. The folders
-#   outside the solution are criterion 3's test projects and controls (src/Runner
-#   references Microsoft.Testing.Platform as a library, and is scored), and
+#   outside the solution are criterion 3's test projects and controls
+#   (src/Clock.TestRunner.VsTest ends in Test, and src/Runner references
+#   Microsoft.Testing.Platform as a library; both are scored), and
 #   src/Clock/obj/Generated.cs is build output.
 # csharp-no-coverlet: the same solution, with no coverlet.MTP in the test project.
 write_csharp() {
@@ -558,6 +559,7 @@ CS
 </Project>' Probe Poke
   write_csproj_with_class "$project/src/Clock.UnitTest" Clock.UnitTest '<Project Sdk="MSTest.Sdk/4.2.2">
 </Project>' Drill Repeat
+  write_csproj_with_class "$project/src/Clock.TestRunner.VsTest" Clock.TestRunner.VsTest "$plain" Bridge Relay
   write_csproj_with_class "$project/src/Runner" Runner '<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <PackageReference Include="Microsoft.Testing.Platform" Version="2.0.0" />
