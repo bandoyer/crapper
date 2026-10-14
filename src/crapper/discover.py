@@ -1,7 +1,7 @@
 """Find source files and decide which language each one is written in."""
 
 import os
-import re
+import xml.etree.ElementTree as ET
 from functools import lru_cache
 from pathlib import Path
 
@@ -69,16 +69,11 @@ JS_TEST_SUFFIXES = (
 )
 
 
-# A C# test project's .csproj says so, uses MSTest.Sdk, or references a test
-# framework: the rule skillflow #270, #271 and #272 share. Microsoft.Testing.Platform
-# isn't one, since production code, such as a test runner, references it too.
-CSHARP_TEST_PROJECT = re.compile(
-    r"<IsTestProject>\s*true\s*</IsTestProject>"
-    r'|\bSdk="MSTest\.Sdk(?:/[^"]*)?"'
-    r'|<PackageReference\b[^>]*\bInclude="'
-    r'(?:Microsoft\.NET\.Test\.Sdk|NUnit|xunit|xunit\.v3|MSTest|MSTest\.TestFramework)"',
-    re.IGNORECASE,
-)
+# A C# test project's .csproj says so, uses MSTest.Sdk, or references one of
+# these test frameworks: the rule skillflow #270, #271 and #272 share.
+# Microsoft.Testing.Platform isn't one, since production code, such as a test
+# runner, references it too. NuGet reads package IDs without regard to case.
+CSHARP_TEST_PACKAGES = {"microsoft.net.test.sdk", "nunit", "xunit", "xunit.v3", "mstest", "mstest.testframework"}
 CSHARP_BUILD_DIRS = {"bin", "obj"}
 
 
@@ -101,6 +96,30 @@ def _csharp_project(folder: Path) -> Path | None:
     return _csharp_project(folder.parent)
 
 
+def _marks_a_test_project(csproj: Path) -> bool:
+    """Whether the .csproj sets IsTestProject, uses MSTest.Sdk, or references a test framework.
+
+    It is read as XML, by local names, so a comment counts for nothing, quoting
+    and spacing don't matter, and an old-style MSBuild namespace is fine. A
+    file that can't be read as XML marks nothing; MSBuild can't load it either.
+    """
+
+    try:
+        root = ET.parse(csproj).getroot()
+    except (ET.ParseError, OSError):
+        return False
+    for element in root.iter():
+        tag = element.tag.rsplit("}", 1)[-1]
+        if tag == "IsTestProject" and (element.text or "").strip().lower() == "true":
+            return True
+        if tag == "PackageReference" and element.get("Include", "").strip().lower() in CSHARP_TEST_PACKAGES:
+            return True
+        sdks = element.get("Sdk", "") if tag == "Project" else element.get("Name", "") if tag == "Sdk" else ""
+        if any(sdk.split("/")[0].strip().lower() == "mstest.sdk" for sdk in sdks.split(";")):
+            return True
+    return False
+
+
 @lru_cache(maxsize=None)
 def _is_csharp_test_project(project: Path) -> bool:
     """Whether a C# project is a test project.
@@ -113,10 +132,7 @@ def _is_csharp_test_project(project: Path) -> bool:
     name = project.name
     if {"Test", "Tests"} & set(name.split(".")) or name.endswith("Tests"):
         return True
-    return any(
-        CSHARP_TEST_PROJECT.search(csproj.read_text(encoding="utf-8", errors="replace"))
-        for csproj in project.glob("*.csproj")
-    )
+    return any(_marks_a_test_project(csproj) for csproj in project.glob("*.csproj"))
 
 
 def _csharp_unscored(path: Path) -> bool:

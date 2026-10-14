@@ -16,7 +16,7 @@ CRAP = CC² × (1 − coverage)³ + CC
 ./crapper
 ```
 
-The first run creates `.venv` and installs the tool. On Windows, run `crapper.cmd`. It makes `.venv` with `py -3`, or `python` when the `py` launcher is missing, and runs `.venv\Scripts\python.exe` in Python's UTF-8 mode, so output sent to a file or a pipe can hold the help's `−` and any name outside the Windows code page. A failed install removes the half-made `.venv`, so the next run tries again. From a project root it walks the tree, skips `test`, `spec`, `vendor`, `node_modules`, and `target`, and writes two results:
+The first run creates `.venv` and installs the tool. On Windows, run `crapper.cmd`. It makes `.venv` with `py -3`, or `python` when the `py` launcher is missing, and runs `.venv\Scripts\python.exe` in Python's UTF-8 mode, so output sent to a file or a pipe can hold the help's `−` and any name outside the Windows code page. It treats `.venv` as made once it imports crapper, so an install cut short is made again on the next run, and a failed install removes `.venv` when that run made it. From a project root it walks the tree, skips `test`, `spec`, `vendor`, `node_modules`, and `target`, and writes two results:
 
 - a table on stdout, worst score first
 - `.metrics/crap.edn`, replaced on every successful analysis

@@ -92,7 +92,7 @@ def _clean_dir(path: Path) -> None:
         shutil.rmtree(path)
 
 
-_COVERAGE_DIRS = {"typescript", "rust", "go", "python"}
+_COVERAGE_DIRS = {"typescript", "rust", "go", "python", "csharp"}
 
 
 def _outside_language_dirs(coverage: Path, path: Path) -> bool:

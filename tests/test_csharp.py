@@ -181,6 +181,32 @@ def test_files_in_a_test_project_are_not_scored(tmp_path):
     assert iter_source_files([tmp_path]) == []
 
 
+def test_a_csproj_is_read_as_xml(tmp_path):
+    """Review round 1: quoting, spacing and an old-style namespace don't hide a test project, and a comment doesn't make one."""
+
+    legacy = (
+        '<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">'
+        '<ItemGroup><PackageReference Include="MSTest.TestFramework"><Version>3.0.0</Version></PackageReference>'
+        "</ItemGroup></Project>"
+    )
+    tests = [
+        _project(tmp_path / "Quoted", "<Project><ItemGroup><PackageReference Include='xunit.v3' /></ItemGroup></Project>"),
+        _project(tmp_path / "Spaced", '<Project><ItemGroup><PackageReference Include = "NUnit" /></ItemGroup></Project>'),
+        _project(tmp_path / "Legacy", legacy),
+        _project(tmp_path / "SdkQuoted", "<Project Sdk='MSTest.Sdk/4.2.2'></Project>"),
+        _project(tmp_path / "SdkElement", '<Project><Sdk Name="MSTest.Sdk" Version="3.6.1" /></Project>'),
+    ]
+    scored = [
+        _project(tmp_path / "Commented", '<Project><!-- <PackageReference Include="NUnit" /> '
+                 "<IsTestProject>true</IsTestProject> --></Project>"),
+        _project(tmp_path / "Broken", '<Project><ItemGroup><PackageReference Include="NUnit"'),
+    ]
+    for source in tests:
+        assert is_test_file(source) is True, source
+    for source in scored:
+        assert is_test_file(source) is False, source
+
+
 def test_files_in_other_projects_and_in_no_project_are_scored(tmp_path):
     scored = [
         _project(tmp_path / "Contests"),

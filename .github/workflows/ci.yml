@@ -63,6 +63,16 @@ jobs:
           type second.txt
           findstr /c:"Successfully installed" second.txt && exit /b 1
           findstr /c:"Usage: crapper" second.txt || exit /b 1
+      # An install cut short leaves python.exe without crapper; the next run installs again.
+      - name: An install cut short is made again
+        shell: cmd
+        run: |
+          .venv\Scripts\python.exe -m pip uninstall -y crapper || exit /b 1
+          call crapper.cmd --help > third.txt
+          if errorlevel 1 (type third.txt & exit /b 1)
+          type third.txt
+          findstr /c:"Successfully installed" third.txt || exit /b 1
+          findstr /c:"Usage: crapper" third.txt || exit /b 1
       # With no report on disk, Open scores 0% and CRAP 6, above the threshold.
       - name: crapper's exit status reaches the caller
         shell: cmd
