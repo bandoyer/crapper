@@ -406,7 +406,9 @@ write_csproj_with_class() {
 #   Ticker with a positive start and call Tick on both branches. The folders
 #   outside the solution are criterion 3's test projects and controls
 #   (src/Clock.TestRunner.VsTest ends in Test, and src/Runner references
-#   Microsoft.Testing.Platform as a library; both are scored), and
+#   Microsoft.Testing.Platform as a library; both are scored), the .csproj
+#   spellings XML allows (src/Quoted, Spaced, Legacy and SdkElement are test
+#   projects; src/Commented and Broken are scored), and
 #   src/Clock/obj/Generated.cs is build output.
 # csharp-no-coverlet: the same solution, with no coverlet.MTP in the test project.
 write_csharp() {
@@ -560,6 +562,35 @@ CS
   write_csproj_with_class "$project/src/Clock.UnitTest" Clock.UnitTest '<Project Sdk="MSTest.Sdk/4.2.2">
 </Project>' Drill Repeat
   write_csproj_with_class "$project/src/Clock.TestRunner.VsTest" Clock.TestRunner.VsTest "$plain" Bridge Relay
+  # The .csproj is read as XML: quoting, spacing, an old-style namespace and the
+  # <Sdk> element still mark a test project, and a comment marks nothing.
+  write_csproj_with_class "$project/src/Quoted" Quoted "<Project Sdk=\"Microsoft.NET.Sdk\">
+  <ItemGroup>
+    <PackageReference Include='xunit.v3' Version='3.1.0' />
+  </ItemGroup>
+</Project>" Quote Echo
+  write_csproj_with_class "$project/src/Spaced" Spaced '<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include = "NUnit" Version = "4.4.0" />
+  </ItemGroup>
+</Project>' Gap Widen
+  write_csproj_with_class "$project/src/Legacy" Legacy '<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <PackageReference Include="MSTest.TestFramework">
+      <Version>3.6.1</Version>
+    </PackageReference>
+  </ItemGroup>
+</Project>' Old Recall
+  write_csproj_with_class "$project/src/SdkElement" SdkElement '<Project>
+  <Sdk Name="MSTest.Sdk" Version="3.6.1" />
+</Project>' Element Attach
+  write_csproj_with_class "$project/src/Commented" Commented '<Project Sdk="Microsoft.NET.Sdk">
+  <!-- <PackageReference Include="NUnit" Version="4.4.0" />
+       <IsTestProject>true</IsTestProject> -->
+</Project>' Remark KeepCommented
+  write_csproj_with_class "$project/src/Broken" Broken '<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="NUnit"' Fault KeepBroken
   write_csproj_with_class "$project/src/Runner" Runner '<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <PackageReference Include="Microsoft.Testing.Platform" Version="2.0.0" />
